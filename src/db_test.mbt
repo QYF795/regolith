@@ -235,3 +235,24 @@ test "db recovery drops torn tables" {
   assert_true(db2.stats().l0_files == 0)
   assert_true(db2.get(b"a") is None)
 }
+
+test "db get hits every key in bloom-filtered tables" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_memtable_limit(1024)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  for i = 0; i < 200; i = i + 1 {
+    let k = Bytes::from_array([i.to_byte(), (i / 256).to_byte()])
+    db.put(k, Bytes::from_array([i.to_byte()]))
+  }
+  db.flush()
+  // All tables now carry bloom filters; every written key must read back.
+  for i = 0; i < 200; i = i + 1 {
+    let k = Bytes::from_array([i.to_byte(), (i / 256).to_byte()])
+    assert_true(db.get(k) == Some(Some(Bytes::from_array([i.to_byte()]))))
+  }
+  // Absent keys: the filter may say yes (false positive) but get says no.
+  for i = 0; i < 50; i = i + 1 {
+    let k = Bytes::from_array([(255).to_byte(), i.to_byte()])
+    assert_true(db.get(k) is None)
+  }
+}

@@ -92,15 +92,25 @@ pub fn Db::get(self : Db, key : Bytes) -> Option[Option[Bytes]] raise DbError {
     Some(v) => return Some(v)
     None => ()
   }
+  // Bloom filters let us skip tables that provably do not contain the key.
   let n = self.l0_readers.val.length()
   for i = n - 1; i >= 0; i = i - 1 {
-    match self.l0_readers.val[i].get(key) {
-      Some(v) => return Some(v)
-      None => ()
+    let r = self.l0_readers.val[i]
+    if r.may_contain(key) {
+      match r.get(key) {
+        Some(v) => return Some(v)
+        None => ()
+      }
     }
   }
   match self.l1_reader.val {
-    Some(r) => r.get(key)
+    Some(r) => {
+      if r.may_contain(key) {
+        r.get(key)
+      } else {
+        None
+      }
+    }
     None => None
   }
 }

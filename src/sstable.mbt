@@ -1,19 +1,72 @@
 // sstable.mbt
 //
-// SSTable v1: the on-disk sorted table. Layout (see docs/format.md §3):
+// SSTable v2: the on-disk sorted table (v1 files are still readable). Layout
+// (see docs/format.md §3):
 //
-//   blocks* index footer
+//   blocks* index bloom footer
 //   block  := count(varint) entry*
 //   entry  := tomb(varint) seq(varint) kl(varint) key vl(varint) value
 //   index  := m(varint) (kl(varint) last_key offset(varint))*
-//   footer := idx_off(u64 LE) crc(u32 LE) crc2(u32 LE) magic("RGSST1")
+//   bloom  := n(varint) m_bits(varint) bits
+//   footer := idx_off(u64 LE) bloom_off(u64 LE) crc(u32 LE) crc2(u32 LE)
+//             magic("RGSST2")
 //
-// crc covers everything before the footer; crc2 covers the footer's offset
-// and checksum fields, so a single flipped byte anywhere in the file makes
-// the whole table unreadable — reads can never return silently wrong data.
+// The bloom filter (k=7 double hashing, 10 bits per key) lets point reads
+// skip tables that provably do not contain the key. crc covers everything
+// before the footer; crc2 covers the footer's offset and checksum fields, so
+// a single flipped byte anywhere in the file makes the whole table unreadable
+// — reads can never return silently wrong data.
 
 const SST_MAGIC_V1 : String = "RGSST1"
+const SST_MAGIC_V2 : String = "RGSST2"
 const FOOTER_V1 : Int = 22
+const FOOTER_V2 : Int = 30
+const BLOOM_SEED : UInt = 0xBC9F1D34U
+const BLOOM_K : Int = 7
+const BLOOM_BITS_PER_KEY : Int = 10
+
+/// True when `bytes[at:at+magic.length()]` spells `magic` (ASCII).
+fn magic_is(bytes : Bytes, at : Int, magic : String) -> Bool {
+  if at < 0 || at + magic.length() > bytes.length() {
+    return false
+  }
+  for j = 0; j < magic.length(); j = j + 1 {
+    if bytes[at + j].to_int() != magic[j].to_int() {
+      return false
+    }
+  }
+  true
+}
+
+/// A key filter over the table. Built with LevelDB-style double hashing:
+///
+///   h  = crc32_init(key, BLOOM_SEED)
+///   gi = (h + i * delta) % m,  delta = (h >> 17) | (h << 15)
+///
+/// k=7 probes into m=10·n bits gives ~0.8% false positives. A bloom "no" is
+/// authoritative — the key is definitely absent; a bloom "yes" only decides
+/// that the real lookup is worth doing.
+pub(all) struct Bloom {
+  m_bits : Int
+  bits : Bytes
+}
+
+pub fn Bloom::may_contain(self : Bloom, key : Bytes) -> Bool {
+  let m = self.m_bits
+  if m == 0 {
+    return false
+  }
+  let mut h = crc32_init(key, BLOOM_SEED)
+  let delta = (h >> 17) | (h << 15)
+  for _i = 0; _i < BLOOM_K; _i = _i + 1 {
+    let bit = (h % m.reinterpret_as_uint()).reinterpret_as_int()
+    if (self.bits[bit >> 3].to_int() & (1 << (bit & 7))) == 0 {
+      return false
+    }
+    h = (h + delta) & 0xFFFFFFFFU
+  }
+  true
+}
 
 fn write_u64_le(buf : @buffer.Buffer, v : UInt64) -> Unit {
   for i = 0; i < 8; i = i + 1 {
@@ -67,7 +120,7 @@ fn encode_entry(buf : @buffer.Buffer, entry : Entry) -> Unit {
   }
 }
 
-/// Builds an SSTable v1 from entries added in ascending key order.
+/// Builds an SSTable v2 from entries added in ascending key order.
 pub(all) struct SstBuilder {
   data : @buffer.Buffer
   block : @buffer.Buffer
@@ -75,6 +128,7 @@ pub(all) struct SstBuilder {
   block_count : Ref[Int]
   index_count : Ref[Int]
   last_key : Ref[Option[Bytes]]
+  bloom_hashes : Array[UInt]
   block_size : Int
 }
 
@@ -86,6 +140,7 @@ pub fn SstBuilder::new(block_size~ : Int = 4096) -> SstBuilder {
     block_count: Ref(0),
     index_count: Ref(0),
     last_key: Ref(None),
+    bloom_hashes: [],
     block_size,
   }
 }
@@ -115,12 +170,13 @@ pub fn SstBuilder::add(self : SstBuilder, entry : Entry) -> Unit {
   encode_entry(self.block, entry)
   self.block_count.val = self.block_count.val + 1
   self.last_key.val = Some(entry.key)
+  self.bloom_hashes.push(crc32_init(entry.key, BLOOM_SEED))
   if self.block.length() >= self.block_size {
     self.seal_block()
   }
 }
 
-/// Finishes the table and returns the serialized bytes.
+/// Finishes the table and returns the serialized bytes (v2, with bloom).
 pub fn SstBuilder::finish(self : SstBuilder) -> Bytes {
   self.seal_block()
   let idx_off = self.data.length()
@@ -129,14 +185,43 @@ pub fn SstBuilder::finish(self : SstBuilder) -> Bytes {
   put_varint(final_index, self.index_count.val.to_uint64())
   final_index.write_bytes(self.index.to_bytes())
   self.data.write_bytes(final_index.to_bytes())
+  // The bloom segment: n(varint) m_bits(varint) bits. The bit size depends on
+  // the final key count, so `add` records the raw hash and the filter is
+  // materialized here.
+  let bloom_off = self.data.length()
+  let n = self.bloom_hashes.length()
+  let m_bits = n * BLOOM_BITS_PER_KEY
+  if m_bits > 0 {
+    let nbytes = (m_bits + 7) / 8
+    let bits : Array[Byte] = []
+    for _i = 0; _i < nbytes; _i = _i + 1 {
+      bits.push((0).to_byte())
+    }
+    for h0 in self.bloom_hashes {
+      let mut h = h0
+      let delta = (h >> 17) | (h << 15)
+      for _i = 0; _i < BLOOM_K; _i = _i + 1 {
+        let bit = (h % m_bits.reinterpret_as_uint()).reinterpret_as_int()
+        bits[bit >> 3] = (bits[bit >> 3].to_int() | (1 << (bit & 7))).to_byte()
+        h = (h + delta) & 0xFFFFFFFFU
+      }
+    }
+    put_varint(self.data, n.to_uint64())
+    put_varint(self.data, m_bits.to_uint64())
+    self.data.write_bytes(Bytes::from_array(bits))
+  } else {
+    put_varint(self.data, 0UL)
+    put_varint(self.data, 0UL)
+  }
   let body = self.data.to_bytes()
   let footer = @buffer.Buffer(size_hint=32)
   write_u64_le(footer, idx_off.to_uint64())
+  write_u64_le(footer, bloom_off.to_uint64())
   let crc = crc32(body)
   write_u32_le(footer, crc)
   let crc2 = crc32(footer.to_bytes())
   write_u32_le(footer, crc2)
-  footer.write_bytes(b"RGSST1")
+  footer.write_bytes(b"RGSST2")
   body + footer.to_bytes()
 }
 
@@ -146,20 +231,28 @@ pub(all) struct SstReader {
   idx_off : Int
   index_keys : Array[Bytes]
   index_offsets : Array[Int]
+  bloom : Option[Bloom]
 }
 
 /// Validates magic, both checksums and the index, then returns the reader.
+/// v1 files (no bloom) are still accepted; they answer `may_contain` with
+/// `true` and behave exactly as before.
 pub fn parse(bytes : Bytes) -> SstReader raise DbError {
-  let len = bytes.length()
-  if len < FOOTER_V1 + 1 {
+  if bytes.length() < FOOTER_V1 {
     raise DbError::Corrupt("sst: file too short")
   }
-  let fb = len - FOOTER_V1
-  for j = 0; j < 6; j = j + 1 {
-    if bytes[fb + 16 + j].to_int() != SST_MAGIC_V1[j].to_int() {
-      raise DbError::Corrupt("sst: bad magic")
-    }
+  if magic_is(bytes, bytes.length() - 6, SST_MAGIC_V1) {
+    parse_v1(bytes)
+  } else if magic_is(bytes, bytes.length() - 6, SST_MAGIC_V2) {
+    parse_v2(bytes)
+  } else {
+    raise DbError::Corrupt("sst: bad magic")
   }
+}
+
+fn parse_v1(bytes : Bytes) -> SstReader raise DbError {
+  let len = bytes.length()
+  let fb = len - FOOTER_V1
   let crc = read_u32_le(bytes, fb + 8)
   let crc2 = read_u32_le(bytes, fb + 12)
   if crc32(bytes[0:fb]) != crc {
@@ -220,6 +313,112 @@ pub fn parse(bytes : Bytes) -> SstReader raise DbError {
     idx_off: idx_off,
     index_keys: keys,
     index_offsets: offs,
+    bloom: None,
+  }
+}
+
+fn parse_v2(bytes : Bytes) -> SstReader raise DbError {
+  let len = bytes.length()
+  if len < FOOTER_V2 + 1 {
+    raise DbError::Corrupt("sst: file too short")
+  }
+  let fb = len - FOOTER_V2
+  let crc = read_u32_le(bytes, fb + 16)
+  let crc2 = read_u32_le(bytes, fb + 20)
+  if crc32(bytes[0:fb]) != crc {
+    raise DbError::Corrupt("sst: checksum mismatch")
+  }
+  if crc32(bytes[fb:fb + 20]) != crc2 {
+    raise DbError::Corrupt("sst: footer checksum mismatch")
+  }
+  let idx_off = read_u64_le(bytes, fb).to_int()
+  let bloom_off = read_u64_le(bytes, fb + 8).to_int()
+  if idx_off < 0 || bloom_off < idx_off || bloom_off > fb {
+    raise DbError::Corrupt("sst: offsets out of range")
+  }
+  let pos = Ref(idx_off)
+  let m = match try_varint(bytes, pos) {
+    None => raise DbError::Corrupt("sst: bad index")
+    Some(v) => v.to_int()
+  }
+  if m < 1 || m > 1_000_000 {
+    raise DbError::Corrupt("sst: bad index size")
+  }
+  let keys : Array[Bytes] = []
+  let offs : Array[Int] = []
+  let mut prev_key = b""
+  let mut prev_off = -1
+  for _i = 0; _i < m; _i = _i + 1 {
+    let kl = match try_varint(bytes, pos) {
+      None => raise DbError::Corrupt("sst: bad index key")
+      Some(v) => v.to_int()
+    }
+    if kl <= 0 || pos.val + kl > bloom_off {
+      raise DbError::Corrupt("sst: index key out of range")
+    }
+    let key = bytes[pos.val:pos.val + kl].to_owned()
+    pos.val = pos.val + kl
+    let off = match try_varint(bytes, pos) {
+      None => raise DbError::Corrupt("sst: bad index offset")
+      Some(v) => v.to_int()
+    }
+    if off < 0 || off >= idx_off {
+      raise DbError::Corrupt("sst: block offset out of range")
+    }
+    if prev_off >= off {
+      raise DbError::Corrupt("sst: block offsets not increasing")
+    }
+    if prev_off >= 0 && prev_key.compare(key) >= 0 {
+      raise DbError::Corrupt("sst: index keys not increasing")
+    }
+    keys.push(key)
+    offs.push(off)
+    prev_key = key
+    prev_off = off
+  }
+  if pos.val != bloom_off {
+    raise DbError::Corrupt("sst: trailing bytes in index")
+  }
+  // Bloom segment: n, m_bits, ceil(m_bits/8) bytes of bits.
+  let bpos = Ref(bloom_off)
+  let n = match try_varint(bytes, bpos) {
+    None => raise DbError::Corrupt("sst: bad bloom header")
+    Some(v) => v.to_int()
+  }
+  if n < 0 || n > 1_000_000 {
+    raise DbError::Corrupt("sst: bad bloom count")
+  }
+  let m_bits = match try_varint(bytes, bpos) {
+    None => raise DbError::Corrupt("sst: bad bloom bits")
+    Some(v) => v.to_int()
+  }
+  if m_bits < 0 || m_bits > 64_000_000 {
+    raise DbError::Corrupt("sst: bad bloom size")
+  }
+  let nbytes = (m_bits + 7) / 8
+  if bpos.val + nbytes != fb {
+    raise DbError::Corrupt("sst: trailing bytes in bloom")
+  }
+  let bloom = if m_bits == 0 {
+    None
+  } else {
+    Some({ m_bits: m_bits, bits: bytes[bpos.val:bpos.val + nbytes].to_owned() })
+  }
+  {
+    bytes: bytes,
+    idx_off: idx_off,
+    index_keys: keys,
+    index_offsets: offs,
+    bloom: bloom,
+  }
+}
+
+/// The bloom filter says the key is absent, or the table has no filter (v1).
+/// A `false` answer is authoritative; `true` only avoids a wasted lookup.
+pub fn SstReader::may_contain(self : SstReader, key : Bytes) -> Bool {
+  match self.bloom {
+    None => true
+    Some(b) => b.may_contain(key)
   }
 }
 
