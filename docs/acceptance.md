@@ -1,8 +1,8 @@
 # Regolith 验收清单
 
 本文按里程碑列出验收项、实现状态与对应测试。当前状态：**46 项测试在
-js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端由 CI
-验证，见 §M2）。
+js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
+C 编译器，当前以双后端验证为准）。
 
 ## M0 — 引擎基础（存储格式 + KV 语义）
 
@@ -46,7 +46,7 @@ js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端�
 | 5 | CLI：set/get/del/scan/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 5 项；`moon run --target js src/cli` 端到端实测 |
 | 6 | demo 可执行包全流程演示 | ✅ | `moon run --target js src/demo` 端到端实测 |
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
-| 8 | CI：三后端测试 + 静态检查 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check`） |
+| 8 | CI：三后端测试 + 静态检查 | ⏳ 待补 | 工作流文件已在本地就绪（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py`），受提交环境网络限制暂未入库，网络恢复后补上 |
 | 9 | 无第三方依赖（仅 moonbitlang 官方 core / x） | ✅ | moon.mod 仅依赖 `moonbitlang/x` |
 
 ## 复现步骤
@@ -55,7 +55,7 @@ js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端�
 git clone https://github.com/QYF795/regolith
 cd regolith
 moon test                       # 本机可跑的后端（js + wasm-gc）
-moon test --target native       # 需要本机 C 编译器；无则看 CI
+moon test --target native       # 需要本机 C 编译器；无则跳过
 python tools/sim_crash.py       # 独立模型模拟器（200 种子）
 moon run --target js src/demo   # 端到端演示
 ```

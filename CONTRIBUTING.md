@@ -8,7 +8,7 @@ LSM-tree 键值存储，欢迎任何形式的贡献：bug 报告、文档修正�
 
 - [moon](https://www.moonbitlang.com/download/) ≥ 0.1.2026（moon.mod 为 TOML 格式）
 - 本机测试需要 js 与 wasm-gc 后端（随 moon 发行）；native 后端额外需要
-  C 编译器（没有也无妨——CI 会跑）
+  C 编译器（没有也无妨，本机验证以 js + wasm-gc 双后端为准）
 
 ```bash
 git clone https://github.com/QYF795/regolith
