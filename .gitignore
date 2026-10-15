@@ -1,0 +1,7 @@
+_build/
+.mooncakes/
+demo-data/
+regolith-test-*/
+__pycache__/
+*.pyc
+crash-diag.txt
