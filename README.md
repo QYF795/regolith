@@ -17,10 +17,22 @@
 ## 快速开始
 
 ```bash
-moon install --frozen
 moon test --target js
 moon test --target wasm-gc
 ```
+
+## CLI
+
+```bash
+moon run --target js src/cli -- set hello regolith
+moon run --target js src/cli -- get hello          # regolith
+moon run --target js src/cli -- scan
+moon run --target js src/cli -- stats
+```
+
+命令：`set <key> <value>` / `get <key>` / `del <key>` / `scan` / `flush` /
+`compact` / `stats`。`set`/`del` 返回 `ok` 时数据已落盘。数据目录
+`regolith-data/` 已 git-ignore。
 
 ## API
 
@@ -40,9 +52,9 @@ fn main {
 ## 目录结构
 
 ```
-src/           引擎实现（WAL / MemTable / SSTable / Db / 合并迭代器）
+src/           引擎实现（WAL / MemTable / SSTable / Db / 合并迭代器 / CLI / demo）
 tools/         开发工具（sim_crash.py：崩溃一致性全状态模拟器）
-docs/          设计文档（format / acceptance / design）
+docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.md) / [设计文档](docs/design.md)
 ```
 
 ## 许可证
