@@ -175,7 +175,7 @@ pub fn Db::flush(self : Db) -> Unit raise DbError {
 /// Full-merges the memtable, every L0 table and the current L1 into a single
 /// L1_<S> table, where S is the largest sequence number it contains. The new
 /// table is written and validated before any old file is removed.
-fn Db::compact(self : Db) -> Unit raise DbError {
+pub fn Db::compact(self : Db) -> Unit raise DbError {
   let streams : Array[Stream] = []
   streams.push(Stream::Mem(self.memtable.iter()))
   for r in self.l0_readers.val {

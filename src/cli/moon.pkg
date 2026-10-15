@@ -1,0 +1,7 @@
+import {
+  "regolith",
+  "regolith/clicore",
+  "moonbitlang/core/argparse",
+}
+
+pkgtype(kind: "executable")

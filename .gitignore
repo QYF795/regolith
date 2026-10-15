@@ -1,6 +1,7 @@
 _build/
 .mooncakes/
 demo-data/
+regolith-data/
 regolith-test-*/
 __pycache__/
 *.pyc

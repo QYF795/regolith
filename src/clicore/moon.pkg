@@ -1,0 +1,4 @@
+import {
+  "regolith",
+  "moonbitlang/core/encoding/utf8",
+}

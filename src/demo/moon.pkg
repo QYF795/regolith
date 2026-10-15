@@ -1,0 +1,6 @@
+import {
+  "regolith",
+  "moonbitlang/core/encoding/utf8",
+}
+
+pkgtype(kind: "executable")
