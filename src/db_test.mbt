@@ -256,3 +256,62 @@ test "db get hits every key in bloom-filtered tables" {
     assert_true(db.get(k) is None)
   }
 }
+
+test "db scan_prefix returns only keys under the prefix" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  // Keys before, inside and after the "app" prefix, across a flush boundary
+  // so the merge pulls from both a table and the memtable.
+  db.put(b"ant", b"1")
+  db.put(b"app1", b"2")
+  db.put(b"apple", b"3")
+  db.flush()
+  db.put(b"app2", b"4")
+  db.put(b"apricot", b"5")
+  db.put(b"banana", b"6")
+  db.delete(b"app1")
+  let it = db.scan_prefix(b"app")
+  let keys : Array[Bytes] = []
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => keys.push(e.key)
+    }
+  }
+  assert_true(it.error() is None)
+  // The deleted "app1" is suppressed; "apricot"/"banana" are outside.
+  assert_true(keys.length() == 2)
+  assert_true(keys[0] == b"app2")
+  assert_true(keys[1] == b"apple")
+  // An empty prefix matches every key: the whole store comes back.
+  let all = db.scan_prefix(b"")
+  let mut total = 0
+  while true {
+    match all.next() {
+      None => break
+      Some(_) => total = total + 1
+    }
+  }
+  assert_true(total == 5)
+}
+
+test "db scan_prefix reads from tables after reopen" {
+  let ms = MemoryStorage::new()
+  let db1 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db1.put(b"user:1", b"alice")
+  db1.put(b"user:2", b"bob")
+  db1.put(b"note:1", b"x")
+  db1.flush()
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  let it = db2.scan_prefix(b"user:")
+  match it.next() {
+    Some(e) => assert_true(e.key == b"user:1" && e.value == Some(b"alice"))
+    None => assert_true(false)
+  }
+  match it.next() {
+    Some(e) => assert_true(e.key == b"user:2" && e.value == Some(b"bob"))
+    None => assert_true(false)
+  }
+  assert_true(it.next() is None)
+  assert_true(it.error() is None)
+}

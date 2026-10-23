@@ -50,3 +50,13 @@ test "clicore flush and compact" {
   assert_true(run(db, ["get", "a"]) == "1")
   assert_true(run(db, ["get", "b"]) == "2")
 }
+
+test "clicore scan_prefix" {
+  let db = @regolith.Db::open_memory()
+  let _ = run(db, ["set", "user:1", "alice"])
+  let _ = run(db, ["set", "user:2", "bob"])
+  let _ = run(db, ["set", "note:1", "x"])
+  assert_true(run(db, ["scan_prefix", "user:"]) == "user:1=alice\nuser:2=bob\n")
+  assert_true(run(db, ["scan_prefix", "zz"]) == "")
+  assert_true(run(db, ["scan_prefix"]) == "error: usage: scan_prefix <prefix>")
+}

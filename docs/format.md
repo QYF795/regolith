@@ -81,6 +81,9 @@ entry := tomb(varint) seq(varint) kl(varint) key vl(varint) value
 - `tomb`：0 = 存活值，1 = 墓碑（`vl` 恒为 0，读取为已删除）。
 - `seq`：该写入的全局序列号。
 - 键**严格升序**排列；块在 `block_size`（默认 4096 字节）边界附近封块。
+  升序 = 逐字节字典序（`Bytes::lexical_compare`）。注意 `Bytes::compare` 是
+  长度优先比较，混合长度键时两者不一致——全库键序（跳表、索引、合并
+  迭代器）一律使用字典序。
 
 ### 索引
 

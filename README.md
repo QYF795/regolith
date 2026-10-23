@@ -27,12 +27,13 @@ moon test --target wasm-gc
 moon run --target js src/cli -- set hello regolith
 moon run --target js src/cli -- get hello          # regolith
 moon run --target js src/cli -- scan
+moon run --target js src/cli -- scan_prefix hel    # hello=regolith
 moon run --target js src/cli -- stats
 ```
 
-命令：`set <key> <value>` / `get <key>` / `del <key>` / `scan` / `flush` /
-`compact` / `stats`。`set`/`del` 返回 `ok` 时数据已落盘。数据目录
-`regolith-data/` 已 git-ignore。
+命令：`set <key> <value>` / `get <key>` / `del <key>` / `scan` /
+`scan_prefix <prefix>` / `flush` / `compact` / `stats`。`set`/`del` 返回
+`ok` 时数据已落盘。数据目录 `regolith-data/` 已 git-ignore。
 
 ## API
 

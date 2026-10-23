@@ -40,6 +40,11 @@ fn main {
         positionals=[@argparse.PositionArg("key", num_args=@argparse.ValueRange::single())],
       ),
       @argparse.Command("scan", about="list all live entries"),
+      @argparse.Command(
+        "scan_prefix",
+        about="list entries whose key starts with the prefix",
+        positionals=[@argparse.PositionArg("prefix", num_args=@argparse.ValueRange::single())],
+      ),
       @argparse.Command("flush", about="flush the memtable to L0"),
       @argparse.Command("compact", about="merge everything into L1"),
       @argparse.Command("stats", about="storage statistics"),
@@ -56,11 +61,11 @@ fn main {
     }
   }
   // Flatten the parsed subcommand back into a token array for clicore:
-  // ["set", key, value] / ["get", key] / ["scan"] / ...
+  // ["set", key, value] / ["get", key] / ["scan_prefix", prefix] / ...
   let argv : Array[String] = match matches.subcommand {
     Some((name, m)) => {
       let a : Array[String] = [name]
-      for p in ["key", "value"] {
+      for p in ["key", "value", "prefix"] {
         match m.values.get(p) {
           Some(vs) => {
             for v in vs {

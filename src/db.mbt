@@ -129,6 +129,13 @@ pub fn Db::scan(self : Db) -> MergeIterator {
   MergeIterator::new(streams)
 }
 
+/// Scans every live entry whose key starts with `prefix`, in ascending key
+/// order. Stops early at the first key outside the prefix, so iterating a
+/// small key range does not walk the whole store.
+pub fn Db::scan_prefix(self : Db, prefix : Bytes) -> PrefixIterator {
+  PrefixIterator::new(self.scan(), prefix)
+}
+
 /// Seals the memtable into an L0 table (see the header comment for order).
 pub fn Db::flush(self : Db) -> Unit raise DbError {
   if self.memtable.is_empty() {

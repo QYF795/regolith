@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**46 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**51 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -10,7 +10,7 @@ C 编译器，由 CI 验证，见 §M2）。
 |---|---|---|---|
 | 1 | put / get / delete 基本语义 | ✅ | `db put get delete in memory`（db_test.mbt） |
 | 2 | 键值均为任意字节（含二进制、空值边界） | ✅ | `clicore binary keys and values render as hex`；memtable 测试覆盖空键/空值 |
-| 3 | 有序遍历：scan 按键序输出，墓碑不出现 | ✅ | `db scan returns ordered live entries`、`db scan merges memtable and tables` |
+| 3 | 有序遍历：scan 按键序输出，墓碑不出现；键序为逐字节字典序（混合长度键） | ✅ | `db scan returns ordered live entries`、`db scan merges memtable and tables`、`memtable orders keys lexicographically not by length`、`sst index and get agree on lexicographic order across blocks` |
 | 4 | 同键覆盖：最新写入胜出（跨 memtable 与表） | ✅ | `db compaction keeps newest value across tables`、`memtable overwrite and tombstone` |
 | 5 | SSTable 读写往返、多块切分、索引定位 | ✅ | `sstable round trip`、`sstable multiple blocks` |
 | 6 | WAL 记录编码往返 | ✅ | `wal round trip` |
@@ -43,7 +43,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 2 | 点查经 bloom 短路（整库级） | ✅ | `db get hits every key in bloom-filtered tables` |
 | 3 | v1 格式向后兼容读取 | ✅ | `sstable v1 files still parse (no bloom, may_contain always true)` |
 | 4 | 磁盘格式规范文档（字节级） | ✅ | [docs/format.md](format.md) |
-| 5 | CLI：set/get/del/scan/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 5 项；`moon run --target js src/cli` 端到端实测 |
+| 5 | CLI：set/get/del/scan/scan_prefix/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 6 项；`moon run --target js src/cli` 端到端实测 |
 | 6 | demo 可执行包全流程演示 | ✅ | `moon run --target js src/demo` 端到端实测 |
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
 | 8 | CI：三后端测试 + 静态检查 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py`） |

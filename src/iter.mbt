@@ -143,3 +143,59 @@ pub fn MergeIterator::next(self : MergeIterator) -> Option[Entry] {
 pub fn MergeIterator::error(self : MergeIterator) -> Option[DbError] {
   self.err
 }
+
+
+/// A merge iterator bounded to one key prefix. Skips keys below the prefix
+/// and stops at the first key that does not start with it — keys arrive in
+/// ascending order, so no prefix key can follow a non-prefix key that is
+/// already ≥ the prefix.
+pub(all) struct PrefixIterator {
+  inner : MergeIterator
+  prefix : Bytes
+}
+
+pub fn PrefixIterator::new(inner : MergeIterator, prefix : Bytes) -> PrefixIterator {
+  { inner, prefix }
+}
+
+/// The next live entry whose key starts with the prefix, or `None` once the
+/// range is exhausted (or a source failed — check `error`).
+pub fn PrefixIterator::next(self : PrefixIterator) -> Option[Entry] {
+  let mut cont = true
+  let mut out = None
+  while cont && out is None {
+    match self.inner.next() {
+      None => cont = false
+      Some(e) => {
+        if e.key.lexical_compare(self.prefix) < 0 {
+          continue
+        }
+        if has_prefix(e.key, self.prefix) {
+          out = Some(e)
+        } else {
+          cont = false
+        }
+      }
+    }
+  }
+  out
+}
+
+/// The first failure reported by any underlying source, if any.
+pub fn PrefixIterator::error(self : PrefixIterator) -> Option[DbError] {
+  self.inner.error()
+}
+
+/// True when `key` starts with `prefix`, byte for byte.
+fn has_prefix(key : Bytes, prefix : Bytes) -> Bool {
+  if key.length() < prefix.length() {
+    return false
+  }
+  for i = 0; i < prefix.length(); i = i + 1 {
+    if key[i] != prefix[i] {
+      return false
+    }
+  }
+  true
+}
+
