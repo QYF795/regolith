@@ -1,5 +1,7 @@
 # regolith（月壤）
 
+[![CI](https://github.com/QYF795/regolith/actions/workflows/ci.yml/badge.svg)](https://github.com/QYF795/regolith/actions/workflows/ci.yml)
+
 纯 MoonBit 的嵌入式 LSM-tree 键值存储引擎。零 FFI、零 unsafe，仅依赖
 `moonbitlang/x` 的 `@fs` 做文件访问，可在 MoonBit 支持的任意后端运行。
 
@@ -11,8 +13,9 @@
 - **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 合并压缩
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
+- **前缀范围扫描**：`scan_prefix(p)` 利用键序提前终止，不遍历前缀之外的数据
 - **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite
-- **双后端验证**：js 与 wasm-gc 后端测试全绿，`moon check` 零警告
+- **三后端 CI**：js / wasm-gc / native 测试全绿，`moon check` 零警告
 
 ## 快速开始
 
