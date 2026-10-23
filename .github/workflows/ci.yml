@@ -23,6 +23,11 @@ jobs:
       - name: moon version
         run: moon version --all
 
+      # The registry is a git index: sync it before resolving moonbitlang/x,
+      # otherwise dependency resolution reports "module was not found".
+      - name: moon update
+        run: moon update
+
       # Same pattern as moonbitlang/x: the native backend is occasionally
       # flaky in CI, so retry it a few times before failing the job.
       - name: moon test (native)
