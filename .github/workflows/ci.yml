@@ -31,11 +31,11 @@ jobs:
         with:
           timeout_minutes: 30
           max_attempts: 5
-          command: moon test --target native --serial
+          command: moon test --target native
 
       - name: moon test
         if: matrix.target != 'native'
-        run: moon test --target ${{ matrix.target }} --serial
+        run: moon test --target ${{ matrix.target }}
 
       - name: moon check
         if: matrix.target == 'js'
