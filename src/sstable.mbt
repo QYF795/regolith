@@ -297,7 +297,7 @@ fn parse_v1(bytes : Bytes) -> SstReader raise DbError {
     if prev_off >= off {
       raise DbError::Corrupt("sst: block offsets not increasing")
     }
-    if prev_off >= 0 && prev_key.compare(key) >= 0 {
+    if prev_off >= 0 && prev_key.lexical_compare(key) >= 0 {
       raise DbError::Corrupt("sst: index keys not increasing")
     }
     keys.push(key)
@@ -368,7 +368,7 @@ fn parse_v2(bytes : Bytes) -> SstReader raise DbError {
     if prev_off >= off {
       raise DbError::Corrupt("sst: block offsets not increasing")
     }
-    if prev_off >= 0 && prev_key.compare(key) >= 0 {
+    if prev_off >= 0 && prev_key.lexical_compare(key) >= 0 {
       raise DbError::Corrupt("sst: index keys not increasing")
     }
     keys.push(key)
@@ -429,7 +429,7 @@ pub fn SstReader::get(self : SstReader, key : Bytes) -> Option[Option[Bytes]] ra
   let mut hi = self.index_keys.length()
   while lo < hi {
     let mid = (lo + hi) / 2
-    if self.index_keys[mid].compare(key) < 0 {
+    if self.index_keys[mid].lexical_compare(key) < 0 {
       lo = mid + 1
     } else {
       hi = mid
@@ -481,7 +481,7 @@ pub fn SstReader::get(self : SstReader, key : Bytes) -> Option[Option[Bytes]] ra
       pos.val = pos.val + vl
       Some(view.to_owned())
     }
-    let cmp = key.compare(k.to_owned())
+    let cmp = key.lexical_compare(k.to_owned())
     if cmp == 0 {
       return Some(if tomb == 1 { None } else { v })
     }

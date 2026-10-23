@@ -91,7 +91,7 @@ pub fn MergeIterator::next(self : MergeIterator) -> Option[Entry] {
       match self.heads[i] {
         None => continue
         Some(e) => {
-          if best_i < 0 || e.key.compare(self.heads[best_i].unwrap().key) < 0 {
+          if best_i < 0 || e.key.lexical_compare(self.heads[best_i].unwrap().key) < 0 {
             best_i = i
           }
         }

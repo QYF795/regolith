@@ -80,7 +80,7 @@ pub fn MemTable::put(self : MemTable, key : Bytes, value : Option[Bytes], seq : 
       match cur.nexts[lvl] {
         None => break
         Some(next) => {
-          if next.key.compare(key) < 0 {
+          if next.key.lexical_compare(key) < 0 {
             cur = next
           } else {
             break
@@ -116,7 +116,7 @@ pub fn MemTable::put(self : MemTable, key : Bytes, value : Option[Bytes], seq : 
       match walk.nexts[lvl] {
         None => break
         Some(next) => {
-          if next.key.compare(key) < 0 {
+          if next.key.lexical_compare(key) < 0 {
             walk = next
           } else {
             break
@@ -143,7 +143,7 @@ pub fn MemTable::get(self : MemTable, key : Bytes) -> Option[Option[Bytes]] {
       match cur.nexts[lvl] {
         None => break
         Some(next) => {
-          if next.key.compare(key) < 0 {
+          if next.key.lexical_compare(key) < 0 {
             cur = next
           } else {
             break
