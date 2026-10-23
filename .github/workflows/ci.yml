@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [js, wasm-gc, native]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install moon
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: moon version
+        run: moon version --all
+
+      # Same pattern as moonbitlang/x: the native backend is occasionally
+      # flaky in CI, so retry it a few times before failing the job.
+      - name: moon test (native)
+        if: matrix.target == 'native'
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 30
+          max_attempts: 5
+          command: moon test --target native --serial
+
+      - name: moon test
+        if: matrix.target != 'native'
+        run: moon test --target ${{ matrix.target }} --serial
+
+      - name: moon check
+        if: matrix.target == 'js'
+        run: moon check --deny-warn
+
+      # Independent crash-consistency oracle: same 200-seed scenario family as
+      # src/crash_test.mbt, implemented as a full-state Python simulator.
+      - name: crash model simulator
+        if: matrix.target == 'js'
+        run: python3 tools/sim_crash.py
