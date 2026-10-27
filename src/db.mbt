@@ -132,8 +132,14 @@ pub fn Db::scan(self : Db) -> MergeIterator {
 /// Scans every live entry whose key starts with `prefix`, in ascending key
 /// order. Stops early at the first key outside the prefix, so iterating a
 /// small key range does not walk the whole store.
-pub fn Db::scan_prefix(self : Db, prefix : Bytes) -> PrefixIterator {
-  PrefixIterator::new(self.scan(), prefix)
+pub fn Db::scan_prefix(self : Db, prefix : Bytes) -> RangeIterator {
+  RangeIterator::new_prefix(self.scan(), prefix)
+}
+
+/// Scans every live entry with start <= key < end, in ascending key order.
+/// `end = None` means no upper bound. Stops early at the first key ≥ end.
+pub fn Db::scan_range(self : Db, start : Bytes, end : Option[Bytes]) -> RangeIterator {
+  RangeIterator::new(self.scan(), start, end)
 }
 
 /// Seals the memtable into an L0 table (see the header comment for order).

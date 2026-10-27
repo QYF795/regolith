@@ -60,3 +60,16 @@ test "clicore scan_prefix" {
   assert_true(run(db, ["scan_prefix", "zz"]) == "")
   assert_true(run(db, ["scan_prefix"]) == "error: usage: scan_prefix <prefix>")
 }
+
+test "clicore scan_range" {
+  let db = @regolith.Db::open_memory()
+  let _ = run(db, ["set", "user:1", "alice"])
+  let _ = run(db, ["set", "user:2", "bob"])
+  let _ = run(db, ["set", "note:1", "x"])
+  // "user;" is the first key after the "user:" prefix.
+  assert_true(run(db, ["scan_range", "user:", "user;"]) == "user:1=alice\nuser:2=bob\n")
+  // An empty end means no upper bound.
+  assert_true(run(db, ["scan_range", "note:1", ""]) == "note:1=x\nuser:1=alice\nuser:2=bob\n")
+  assert_true(run(db, ["scan_range", "zz", "zzz"]) == "")
+  assert_true(run(db, ["scan_range"]) == "error: usage: scan_range <start> <end>")
+}

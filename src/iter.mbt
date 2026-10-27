@@ -70,10 +70,10 @@ fn MergeIterator::load(self : MergeIterator, i : Int) -> Unit {
   }
 }
 
-/// Returns the next live entry in ascending key order, skipping tombstones.
+/// Returns the next winning entry in ascending key order, tombstone or not.
 /// Returns `None` when all sources are exhausted (or a source failed — check
 /// `error`).
-pub fn MergeIterator::next(self : MergeIterator) -> Option[Entry] {
+fn MergeIterator::next_raw(self : MergeIterator) -> Option[Entry] {
   if self.err is Some(_) {
     return None
   }
@@ -129,6 +129,21 @@ pub fn MergeIterator::next(self : MergeIterator) -> Option[Entry] {
     }
     match winner {
       None => continue
+      Some(e) => out = Some(e)
+    }
+  }
+  out
+}
+
+/// Returns the next live entry in ascending key order, skipping tombstones.
+/// Returns `None` when all sources are exhausted (or a source failed — check
+/// `error`).
+pub fn MergeIterator::next(self : MergeIterator) -> Option[Entry] {
+  let mut cont = true
+  let mut out = None
+  while cont && out is None {
+    match self.next_raw() {
+      None => cont = false
       Some(e) => {
         if e.value is Some(_) {
           out = Some(e)
@@ -145,35 +160,68 @@ pub fn MergeIterator::error(self : MergeIterator) -> Option[DbError] {
 }
 
 
-/// A merge iterator bounded to one key prefix. Skips keys below the prefix
-/// and stops at the first key that does not start with it — keys arrive in
-/// ascending order, so no prefix key can follow a non-prefix key that is
-/// already ≥ the prefix.
-pub(all) struct PrefixIterator {
+/// A merge iterator bounded to one key range [lo, hi). Skips keys below `lo`
+/// and stops at the first key >= `hi` — keys arrive in ascending order, so no
+/// in-range key can follow an out-of-range one. `scan_prefix` is the same
+/// mechanism: lo = prefix, hi = the first key not starting with the prefix.
+/// When no finite hi exists (a prefix of all 0xFF bytes), a fallback prefix
+/// check plays the upper bound.
+pub(all) struct RangeIterator {
   inner : MergeIterator
-  prefix : Bytes
+  lo : Bytes
+  hi : Option[Bytes]
+  prefix : Option[Bytes]
 }
 
-pub fn PrefixIterator::new(inner : MergeIterator, prefix : Bytes) -> PrefixIterator {
-  { inner, prefix }
+/// An iterator over [lo, hi); `hi = None` means no upper bound.
+pub fn RangeIterator::new(
+  inner : MergeIterator,
+  lo : Bytes,
+  hi : Option[Bytes]
+) -> RangeIterator {
+  { inner, lo, hi, prefix: None }
 }
 
-/// The next live entry whose key starts with the prefix, or `None` once the
-/// range is exhausted (or a source failed — check `error`).
-pub fn PrefixIterator::next(self : PrefixIterator) -> Option[Entry] {
+/// An iterator over every key that starts with `prefix` (see prefix_upper).
+pub fn RangeIterator::new_prefix(inner : MergeIterator, prefix : Bytes) -> RangeIterator {
+  match prefix_upper(prefix) {
+    Some(hi) => { inner, lo: prefix, hi: Some(hi), prefix: None }
+    None => { inner, lo: prefix, hi: None, prefix: Some(prefix) }
+  }
+}
+
+/// The next live entry in the range, or `None` once the range is exhausted
+/// (or a source failed — check `error`).
+pub fn RangeIterator::next(self : RangeIterator) -> Option[Entry] {
   let mut cont = true
   let mut out = None
   while cont && out is None {
     match self.inner.next() {
       None => cont = false
       Some(e) => {
-        if e.key.lexical_compare(self.prefix) < 0 {
+        if e.key.lexical_compare(self.lo) < 0 {
           continue
         }
-        if has_prefix(e.key, self.prefix) {
-          out = Some(e)
-        } else {
-          cont = false
+        match self.hi {
+          Some(h) => {
+            if e.key.lexical_compare(h) >= 0 {
+              cont = false
+            } else {
+              out = Some(e)
+            }
+          }
+          None => {
+            match self.prefix {
+              Some(p) => {
+                if has_prefix(e.key, p) {
+                  out = Some(e)
+                } else {
+                  cont = false
+                }
+              }
+              None => out = Some(e)
+            }
+          }
         }
       }
     }
@@ -182,8 +230,28 @@ pub fn PrefixIterator::next(self : PrefixIterator) -> Option[Entry] {
 }
 
 /// The first failure reported by any underlying source, if any.
-pub fn PrefixIterator::error(self : PrefixIterator) -> Option[DbError] {
+pub fn RangeIterator::error(self : RangeIterator) -> Option[DbError] {
   self.inner.error()
+}
+
+/// The smallest key that sorts after every key starting with `prefix` —
+/// prefix with its last non-0xFF byte incremented. `None` when no finite
+/// such key exists (empty prefix, or a prefix of all 0xFF bytes).
+fn prefix_upper(prefix : Bytes) -> Option[Bytes] {
+  if prefix.length() == 0 {
+    return None
+  }
+  let mut i = prefix.length() - 1
+  while i >= 0 && prefix[i].to_int() == 255 {
+    i = i - 1
+  }
+  if i < 0 {
+    return None
+  }
+  let buf = @buffer.Buffer(size_hint=prefix.length())
+  buf.write_bytes(prefix[0:i])
+  buf.write_byte((prefix[i].to_int() + 1).to_byte())
+  Some(buf.to_bytes())
 }
 
 /// True when `key` starts with `prefix`, byte for byte.
@@ -198,4 +266,3 @@ fn has_prefix(key : Bytes, prefix : Bytes) -> Bool {
   }
   true
 }
-

@@ -106,6 +106,34 @@ pub fn run(db : @regolith.Db, argv : Array[String]) -> String raise @regolith.Db
         out
       }
     }
+    "scan_range" => {
+      if argv.length() != 3 {
+        "error: usage: scan_range <start> <end>"
+      } else {
+        // An empty end means "no upper bound": scan to the last key.
+        let end = if argv[2] == "" {
+          None
+        } else {
+          Some(@utf8.encode(argv[2]))
+        }
+        let mut out = ""
+        let it = db.scan_range(@utf8.encode(argv[1]), end)
+        while true {
+          match it.next() {
+            None => break
+            Some(e) => match e.value {
+              None => ()
+              Some(v) => out = out + show_bytes(e.key) + "=" + show_bytes(v) + "\n"
+            }
+          }
+        }
+        match it.error() {
+          Some(err) => raise err
+          None => ()
+        }
+        out
+      }
+    }
     "flush" => {
       db.flush()
       "ok"
@@ -119,7 +147,7 @@ pub fn run(db : @regolith.Db, argv : Array[String]) -> String raise @regolith.Db
       "memtable: \{s.memtable_bytes} bytes\nwal: \{s.wal_bytes} bytes\nl0: \{s.l0_files} tables\nl1: \{s.l1_files} tables"
     }
     "help" =>
-      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  flush              flush the memtable to L0\n  compact            merge everything into L1\n  stats              storage statistics\n  help               this help"
+      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  scan_range <a> <b> list entries with a <= key < b (empty b = unbounded)\n  flush              flush the memtable to L0\n  compact            merge everything into L1\n  stats              storage statistics\n  help               this help"
     _ => "error: unknown command \{argv[0]} (try \"help\")"
   }
 }

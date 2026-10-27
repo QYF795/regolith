@@ -45,6 +45,14 @@ fn main {
         about="list entries whose key starts with the prefix",
         positionals=[@argparse.PositionArg("prefix", num_args=@argparse.ValueRange::single())],
       ),
+      @argparse.Command(
+        "scan_range",
+        about="list entries with start <= key < end (empty end = unbounded)",
+        positionals=[
+          @argparse.PositionArg("start", num_args=@argparse.ValueRange::single()),
+          @argparse.PositionArg("end", num_args=@argparse.ValueRange::single()),
+        ],
+      ),
       @argparse.Command("flush", about="flush the memtable to L0"),
       @argparse.Command("compact", about="merge everything into L1"),
       @argparse.Command("stats", about="storage statistics"),
@@ -65,7 +73,7 @@ fn main {
   let argv : Array[String] = match matches.subcommand {
     Some((name, m)) => {
       let a : Array[String] = [name]
-      for p in ["key", "value", "prefix"] {
+      for p in ["key", "value", "prefix", "start", "end"] {
         match m.values.get(p) {
           Some(vs) => {
             for v in vs {

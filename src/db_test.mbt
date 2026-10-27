@@ -315,3 +315,89 @@ test "db scan_prefix reads from tables after reopen" {
   assert_true(it.next() is None)
   assert_true(it.error() is None)
 }
+
+fn collect_range(it : RangeIterator) -> Array[Bytes] raise DbError {
+  let keys : Array[Bytes] = []
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => keys.push(e.key)
+    }
+  }
+  match it.error() {
+    Some(err) => raise err
+    None => ()
+  }
+  keys
+}
+
+test "db scan_range returns keys within [start, end)" {
+  let db = Db::open_memory()
+  db.put(b"a", b"1")
+  db.put(b"bb", b"2")
+  db.put(b"c", b"3")
+  db.put(b"dd", b"4")
+  db.put(b"e", b"5")
+  // Inclusive start, exclusive end, mixed key lengths.
+  let keys = collect_range(db.scan_range(b"b", Some(b"dd")))
+  assert_true(keys.length() == 2)
+  assert_true(keys[0] == b"bb")
+  assert_true(keys[1] == b"c")
+  // A key equal to the end bound is excluded.
+  let keys2 = collect_range(db.scan_range(b"a", Some(b"bb")))
+  assert_true(keys2.length() == 1)
+  assert_true(keys2[0] == b"a")
+}
+
+test "db scan_range with open upper bound" {
+  let db = Db::open_memory()
+  db.put(b"a", b"1")
+  db.put(b"bb", b"2")
+  db.put(b"c", b"3")
+  db.put(b"dd", b"4")
+  let keys = collect_range(db.scan_range(b"bb", None))
+  assert_true(keys.length() == 3)
+  assert_true(keys[0] == b"bb")
+  assert_true(keys[1] == b"c")
+  assert_true(keys[2] == b"dd")
+  // start beyond every key, and an empty range [x, x).
+  assert_true(collect_range(db.scan_range(b"z", None)).is_empty())
+  assert_true(collect_range(db.scan_range(b"c", Some(b"c"))).is_empty())
+}
+
+test "db scan_range skips tombstones and reads across reopen" {
+  let ms = MemoryStorage::new()
+  let db1 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db1.put(b"a", b"1")
+  db1.put(b"b", b"2")
+  db1.put(b"c", b"3")
+  db1.flush()
+  db1.delete(b"b")
+  // The tombstone is still in the memtable: the range skips it.
+  let keys = collect_range(db1.scan_range(b"a", Some(b"d")))
+  assert_true(keys.length() == 2)
+  assert_true(keys[0] == b"a")
+  assert_true(keys[1] == b"c")
+  // After a flush and reopen the tombstone lives in an L0 table instead;
+  // the range still skips it.
+  db1.flush()
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  let keys2 = collect_range(db2.scan_range(b"a", Some(b"d")))
+  assert_true(keys2.length() == 2)
+  assert_true(keys2[0] == b"a")
+  assert_true(keys2[1] == b"c")
+}
+
+test "db scan_prefix all-FF prefix falls back to prefix check" {
+  let db = Db::open_memory()
+  db.put(Bytes::from_array([(0xFF).to_byte(), (0xFE).to_byte()]), b"1")
+  db.put(Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte(), (1).to_byte()]), b"2")
+  db.put(Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte()]), b"3")
+  db.put(b"x", b"4")
+  // A prefix of all 0xFF bytes has no finite successor: the upper bound
+  // falls back to a per-key prefix check.
+  let keys = collect_range(db.scan_prefix(Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte()])))
+  assert_true(keys.length() == 2)
+  assert_true(keys[0] == Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte()]))
+  assert_true(keys[1] == Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte(), (1).to_byte()]))
+}
