@@ -6,11 +6,11 @@
 //
 //   moon run --target js demo
 
-fn err_text(e : @regolith.DbError) -> String {
+fn err_text(e : @QYF795/regolith.DbError) -> String {
   match e {
-    @regolith.DbError::Io(m) => m
-    @regolith.DbError::Corrupt(m) => m
-    @regolith.DbError::Fault(m) => m
+    @QYF795/regolith.DbError::Io(m) => m
+    @QYF795/regolith.DbError::Corrupt(m) => m
+    @QYF795/regolith.DbError::Fault(m) => m
   }
 }
 
@@ -43,7 +43,7 @@ fn main {
   println("regolith demo — 月壤 LSM KV store")
   println("==================================\n")
   try {
-    let db = @regolith.Db::open("demo-data")
+    let db = @QYF795/regolith.Db::open("demo-data")
     println("[put] hello=regolith, moon=bit, lsm=wal+memtable+sstable")
     db.put(b"hello", b"regolith")
     db.put(b"moon", b"bit")

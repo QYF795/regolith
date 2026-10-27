@@ -1,6 +1,6 @@
 import {
-  "regolith",
-  "regolith/clicore",
+  "QYF795/regolith",
+  "QYF795/regolith/clicore",
   "moonbitlang/core/argparse",
 }
 

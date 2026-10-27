@@ -1,4 +1,4 @@
-name = "regolith"
+name = "QYF795/regolith"
 
 version = "0.1.0"
 

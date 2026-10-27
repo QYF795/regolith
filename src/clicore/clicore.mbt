@@ -1,7 +1,7 @@
 // clicore.mbt
 //
 // The command engine behind the `regolith` CLI: parses a command-line token
-// array (program name excluded) and runs it against a @regolith.Db, returning the
+// array (program name excluded) and runs it against a @QYF795/regolith.Db, returning the
 // printable result. Pure logic — no argv or stdin access — so every command
 // is testable against an in-memory database.
 
@@ -30,7 +30,7 @@ fn show_bytes(bytes : Bytes) -> String {
 /// Runs one command (argv without the program name) and returns its output.
 /// Usage errors come back as text starting with "error:"; storage failures
 /// are raised.
-pub fn run(db : @regolith.Db, argv : Array[String]) -> String raise @regolith.DbError {
+pub fn run(db : @QYF795/regolith.Db, argv : Array[String]) -> String raise @QYF795/regolith.DbError {
   if argv.length() == 0 {
     return "error: no command (try \"help\")"
   }

@@ -7,11 +7,11 @@
 //   moon run --target js cli -- set hello regolith
 //   moon run cli -- get hello        (native backend, needs a C compiler)
 
-fn err_text(e : @regolith.DbError) -> String {
+fn err_text(e : @QYF795/regolith.DbError) -> String {
   match e {
-    @regolith.DbError::Io(m) => m
-    @regolith.DbError::Corrupt(m) => m
-    @regolith.DbError::Fault(m) => m
+    @QYF795/regolith.DbError::Io(m) => m
+    @QYF795/regolith.DbError::Corrupt(m) => m
+    @QYF795/regolith.DbError::Fault(m) => m
   }
 }
 
@@ -88,7 +88,7 @@ fn main {
     None => return // unreachable: subcommand_required
   }
   let db = try {
-    @regolith.Db::open("regolith-data")
+    @QYF795/regolith.Db::open("regolith-data")
   } catch {
     e => {
       println("error: \{err_text(e)}")

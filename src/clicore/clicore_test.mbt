@@ -1,7 +1,7 @@
 // clicore_test.mbt
 
 test "clicore set get del" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   assert_true(run(db, ["set", "a", "1"]) == "ok")
   assert_true(run(db, ["get", "a"]) == "1")
   assert_true(run(db, ["del", "a"]) == "ok")
@@ -10,7 +10,7 @@ test "clicore set get del" {
 }
 
 test "clicore scan and stats" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   let _ = run(db, ["set", "b", "2"])
   let _ = run(db, ["set", "a", "1"])
   assert_true(run(db, ["scan"]) == "a=1\nb=2\n")
@@ -19,7 +19,7 @@ test "clicore scan and stats" {
 }
 
 test "clicore binary keys and values render as hex" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   db.put(
     Bytes::from_array([(0).to_byte(), (0xFF).to_byte()]),
     Bytes::from_array([(0xFE).to_byte()]),
@@ -28,7 +28,7 @@ test "clicore binary keys and values render as hex" {
 }
 
 test "clicore usage errors" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   assert_true(run(db, []) == "error: no command (try \"help\")")
   assert_true(run(db, ["nope"]) == "error: unknown command nope (try \"help\")")
   assert_true(run(db, ["get"]) == "error: usage: get <key>")
@@ -36,9 +36,9 @@ test "clicore usage errors" {
 }
 
 test "clicore flush and compact" {
-  let ms = @regolith.MemoryStorage::new()
-  let opts = @regolith.Options::default().with_compaction_trigger(2)
-  let db = @regolith.Db::open_with_options(@regolith.Storage::Memory(ms), opts)
+  let ms = @QYF795/regolith.MemoryStorage::new()
+  let opts = @QYF795/regolith.Options::default().with_compaction_trigger(2)
+  let db = @QYF795/regolith.Db::open_with_options(@QYF795/regolith.Storage::Memory(ms), opts)
   let _ = run(db, ["set", "a", "1"])
   assert_true(run(db, ["flush"]) == "ok")
   let _ = run(db, ["set", "b", "2"])
@@ -55,7 +55,7 @@ test "clicore flush and compact" {
 }
 
 test "clicore scan_prefix" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   let _ = run(db, ["set", "user:1", "alice"])
   let _ = run(db, ["set", "user:2", "bob"])
   let _ = run(db, ["set", "note:1", "x"])
@@ -65,7 +65,7 @@ test "clicore scan_prefix" {
 }
 
 test "clicore scan_range" {
-  let db = @regolith.Db::open_memory()
+  let db = @QYF795/regolith.Db::open_memory()
   let _ = run(db, ["set", "user:1", "alice"])
   let _ = run(db, ["set", "user:2", "bob"])
   let _ = run(db, ["set", "note:1", "x"])

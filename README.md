@@ -21,6 +21,19 @@
 ## 快速开始
 
 ```bash
+moon add QYF795/regolith   # 依赖方式使用（mooncakes.io 已发布）
+```
+
+```moonbit
+let db = @QYF795/regolith.Db::open("data")!
+db.put(b"key", b"value")
+inspect(db.get(b"key")!) // Some(Some(b"value"))
+db.flush()! // 落盘确认
+```
+
+本地开发与自测：
+
+```bash
 moon test --target js
 moon test --target wasm-gc
 ```
