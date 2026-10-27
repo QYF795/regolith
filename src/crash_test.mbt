@@ -2,17 +2,19 @@
 //
 // M2 §8: the deterministic crash-consistency suite. For each of 200 seeds a
 // 40-step random workload runs against a FailpointStorage-backed Db. Steps
-// mutate the database, flush, or simulate a crash: plain power loss (the Db
-// is dropped mid-write), or a fault injected into the WAL / table write path
-// (LostWrite on the WAL seal, TornWrite on the WAL seal, TornWrite on an L0
-// table write).
+// mutate the database (single writes or atomic batches), flush, or simulate
+// a crash: plain power loss (the Db is dropped mid-write), or a fault
+// injected into the WAL / table write path (LostWrite on the WAL seal,
+// TornWrite on the WAL seal, TornWrite on an L0 table write).
 //
 // After a crash the Db is reopened on the same storage and its full state
 // must equal the model replayed over *some* prefix of the operation log —
 // the LSM invariant "recovered state = checkpoint ∪ one WAL prefix"
 // (docs/acceptance.md §8). Sequence numbers are exactly 1..n in op order, so
 // replaying the first s ops models a crash that persisted exactly the first
-// s writes.
+// s writes. A batch counts as a single op, so no valid prefix may split it —
+// the suite proves batch atomicity the same way it proves single-write
+// atomicity.
 //
 // The model is an append-only log of *persisted* writes: flush and
 // compaction are invisible to it, and after a crash the ops lost in the
@@ -20,8 +22,7 @@
 // exact check against the surviving log.
 
 struct Op {
-  key : Bytes
-  value : Option[Bytes]
+  entries : Array[(Bytes, Option[Bytes])]
 }
 
 fn next_rand(rng : Ref[UInt64]) -> UInt64 {
@@ -33,13 +34,17 @@ fn next_rand(rng : Ref[UInt64]) -> UInt64 {
   x
 }
 
-/// The model state after the first `s` writes.
+/// The model state after the first `s` ops. One op is one prefix boundary:
+/// a batch counts as a single op, so no prefix may split it (atomicity).
 fn replay(ops : Array[Op], s : Int) -> @hashmap.HashMap[Bytes, Bytes] {
   let m : @hashmap.HashMap[Bytes, Bytes] = @hashmap.HashMap([], capacity=16)
   for i = 0; i < s; i = i + 1 {
-    match ops[i].value {
-      Some(v) => m.set(ops[i].key, v)
-      None => m.remove(ops[i].key)
+    for j = 0; j < ops[i].entries.length(); j = j + 1 {
+      let (key, value) = ops[i].entries[j]
+      match value {
+        Some(v) => m.set(key, v)
+        None => m.remove(key)
+      }
     }
   }
   m
@@ -145,10 +150,17 @@ fn ops_to_string(ops : Array[Op]) -> String {
     if i > 0 {
       s = s + " "
     }
-    s = s + "\{i}:\{ops[i].key[0].to_int()}"
-    match ops[i].value {
-      Some(v) => s = s + "=\{v[0].to_int()}"
-      None => s = s + "=tomb"
+    s = s + "\{i}:"
+    for j = 0; j < ops[i].entries.length(); j = j + 1 {
+      let (key, value) = ops[i].entries[j]
+      if j > 0 {
+        s = s + ","
+      }
+      s = s + "\{key[0].to_int()}"
+      match value {
+        Some(v) => s = s + "=\{v[0].to_int()}"
+        None => s = s + "=tomb"
+      }
     }
   }
   s
@@ -200,20 +212,27 @@ fn run_case(seed : UInt64) -> Unit raise DbError {
   for step = 0; step < 40; step = step + 1 {
     let r = next_rand(rng)
     let key = Bytes::from_array([((r >> 4) % 8).to_int().to_byte()])
-    let op = (r % 10).to_int()
+    let op = (r % 12).to_int()
     if op < 5 {
       // put
       let value = Bytes::from_array([((r >> 8) % 256).to_int().to_byte()])
       db.put(key, value)
-      ops.push({ key, value: Some(value) })
+      ops.push({ entries: [(key, Some(value))] })
     } else if op < 7 {
       // delete
       db.delete(key)
-      ops.push({ key, value: None })
+      ops.push({ entries: [(key, None)] })
     } else if op == 7 {
+      // batch: two writes, one atomic prefix boundary
+      let key2 = Bytes::from_array([(key[0].to_int() ^ 1).to_byte()])
+      let v1 = Bytes::from_array([((r >> 8) % 256).to_int().to_byte()])
+      let v2 = Bytes::from_array([((r >> 16) % 256).to_int().to_byte()])
+      db.write(WriteBatch::new().put(key, v1).put(key2, v2))
+      ops.push({ entries: [(key, Some(v1)), (key2, Some(v2))] })
+    } else if op == 8 {
       // flush (may also trigger compaction — no fault armed)
       db.flush()
-    } else if op == 8 {
+    } else if op == 9 {
       // plain crash: drop the Db mid-life; unflushed writes are lost
       db = Db::open_with_options(Storage::Failpoint(fp), opts)
       ops = truncate_ops(
@@ -223,7 +242,7 @@ fn run_case(seed : UInt64) -> Unit raise DbError {
     } else {
       // fault crash: arm a write fault, flush into it, drop, reopen
       db.put(key, b"x")
-      ops.push({ key, value: Some(b"x") })
+      ops.push({ entries: [(key, Some(b"x"))] })
       let kind = (r >> 8) % 4
       if kind == 0 {
         fp.arm(FaultKind::LostWrite)
@@ -250,7 +269,7 @@ fn run_case(seed : UInt64) -> Unit raise DbError {
         check_prefix(ops, db, "seed=\{seed} step=\{step}"),
       )
     }
-    if op < 8 {
+    if op < 9 {
       check_exact(ops, db, "seed=\{seed} step=\{step}")
     }
   }

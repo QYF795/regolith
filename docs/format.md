@@ -50,16 +50,24 @@ WAL 文件是若干记录的连续拼接，每一条记录：
 ```
 record  := len(varint) crc(payload, u32 LE) payload
 payload := op(1B) seq(varint) kl(varint) key vl(varint) value
-op      := 1 (put) | 2 (delete；vl 恒为 0)
+         | op(1B) seq(varint) n(varint) entry*
+entry   := op(1B) kl(varint) key vl(varint) value
+op      := 1 (put) | 2 (delete；vl 恒为 0) | 3 (batch)
 ```
 
 - `len` 为 payload 长度（不含 4 字节 crc）。
 - `crc` 为 `payload` 的 CRC-32。
-- `op = 2` 时 `vl` 必须是 0（删除记录不携带值）。
+- `op = 2` 时 `vl` 必须是 0（删除记录不携带值）；`op = 1` 且 `vl = 0` 是
+  空值写入，不是删除。
 - `seq` 为全局递增的序列号，全库唯一。
+- `op = 3`（批量记录）：`seq` 为批内首条序列号，`n` 为批内条数，批内第 i
+  条（i 从 0 起）的序列号为 `seq + i`。整批在一条记录内，恢复要么整批重放
+  要么整批丢弃——批量写入的原子性由有效前缀截断规则直接给出。
+- 单条记录 payload 里 `entry` 的 op 字段与顶层一致（1/2），`n < 1` 或批尾
+  与 payload 长度不吻合视为非法。
 
 **尾部截断容忍**：解析器从头顺序读取，遇到第一个 `len` 越界、crc 不匹配或
-payload 非法（如 op 既非 1 也非 2）的记录即停止，把此前解析成功的记录视为
+payload 非法（如 op 既非 1、2 也非 3）的记录即停止，把此前解析成功的记录视为
 有效日志前缀——这是对"写入中途崩溃留下半条记录"的唯一正确处理方式。
 有效前缀之后的字节在下次 flush 时被重写覆盖。
 

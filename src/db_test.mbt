@@ -401,3 +401,59 @@ test "db scan_prefix all-FF prefix falls back to prefix check" {
   assert_true(keys[0] == Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte()]))
   assert_true(keys[1] == Bytes::from_array([(0xFF).to_byte(), (0xFF).to_byte(), (1).to_byte()]))
 }
+
+test "db write batch applies all writes atomically" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  let batch = WriteBatch::new().put(b"a", b"1").put(b"b", b"2").delete(b"gone")
+  db.put(b"gone", b"x")
+  db.write(batch)
+  assert_true(db.get(b"a") == Some(Some(b"1")))
+  assert_true(db.get(b"b") == Some(Some(b"2")))
+  assert_true(db.get(b"gone") == Some(None))
+  // The batch survives a flush + reopen (WAL batch record replay).
+  db.flush()
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  assert_true(db2.get(b"gone") == Some(None))
+}
+
+test "db write batch last write wins within batch" {
+  let db = Db::open_memory()
+  db.put(b"k", b"old")
+  let batch = WriteBatch::new()
+    .put(b"k", b"new")
+    .delete(b"k")
+    .put(b"k", b"newest")
+  db.write(batch)
+  assert_true(db.get(b"k") == Some(Some(b"newest")))
+}
+
+test "db torn batch record recovers to whole batch or nothing" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db.put(b"a", b"1")
+  db.flush()
+  // The WAL now holds exactly one batch record; seal it to storage like a
+  // flush would, then crash mid-seal by tearing its last byte.
+  db.write(WriteBatch::new().put(b"b", b"2").put(b"c", b"3"))
+  write(Storage::Memory(ms), "WAL", db.wal.encode())
+  let bytes = read(Storage::Memory(ms), "WAL").unwrap()
+  // Tear the last byte off the batch record: recovery must not keep half.
+  write(Storage::Memory(ms), "WAL", bytes[0:bytes.length() - 1].to_owned())
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") is None)
+  assert_true(db2.get(b"c") is None)
+}
+
+test "db put of empty value is not a tombstone" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db.put(b"k", b"")
+  assert_true(db.get(b"k") == Some(Some(b"")))
+  db.flush()
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"k") == Some(Some(b"")))
+}

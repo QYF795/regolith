@@ -11,6 +11,7 @@
 ## 特性
 
 - **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 合并压缩
+- **原子批量写**：`Db::write(WriteBatch)` 一次提交多键，WAL 单条记录承载，恢复时整批全有或全无
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
@@ -47,7 +48,8 @@ fn main {
   let db = Db::open("demo-data")! // 默认选项
   db.put(b"key", b"value")
   inspect(db.get(b"key")!) // Some(Some(b"value"))
-  db.delete(b"key")
+  // 多键一次原子提交（全有或全无）
+  db.write(WriteBatch::new().put(b"a", b"1").delete(b"key"))
   db.flush()! // 主动落盘
 }
 ```

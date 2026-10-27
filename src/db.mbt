@@ -86,6 +86,49 @@ pub fn Db::delete(self : Db, key : Bytes) -> Unit raise DbError {
   }
 }
 
+/// A group of writes applied atomically: the memtable gets one contiguous
+/// sequence range and the WAL one batch record, so recovery replays the
+/// whole batch or none of it.
+pub(all) struct WriteBatch {
+  ops : Array[(Bytes, Option[Bytes])]
+}
+
+pub fn WriteBatch::new() -> WriteBatch {
+  { ops: [] }
+}
+
+pub fn WriteBatch::put(self : WriteBatch, key : Bytes, value : Bytes) -> WriteBatch {
+  self.ops.push((key, Some(value)))
+  self
+}
+
+pub fn WriteBatch::delete(self : WriteBatch, key : Bytes) -> WriteBatch {
+  self.ops.push((key, None))
+  self
+}
+
+pub fn WriteBatch::is_empty(self : WriteBatch) -> Bool {
+  self.ops.is_empty()
+}
+
+/// Applies every write in the batch at once. Writes within one batch win
+/// over earlier ones by sequence number, like single writes do.
+pub fn Db::write(self : Db, batch : WriteBatch) -> Unit raise DbError {
+  if batch.is_empty() {
+    return
+  }
+  let base = self.next_seq.val
+  for i = 0; i < batch.ops.length(); i = i + 1 {
+    let (key, value) = batch.ops[i]
+    self.memtable.put(key, value, base + i.to_uint64())
+  }
+  self.wal.append_batch(batch.ops, base)
+  self.next_seq.val = base + batch.ops.length().to_uint64()
+  if self.memtable.size_bytes() >= self.opts.memtable_limit {
+    self.flush()
+  }
+}
+
 /// Reads a key: `None` absent, `Some(None)` deleted, `Some(Some(v))` live.
 pub fn Db::get(self : Db, key : Bytes) -> Option[Option[Bytes]] raise DbError {
   match self.memtable.get(key) {

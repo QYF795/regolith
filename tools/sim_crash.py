@@ -1,8 +1,9 @@
 """Faithful simulation of regolith's Db + crash_test run_case, to diff against
 the real MoonBit implementation. Models: memtable (dict + size accounting),
-group-commit WAL (10-byte tomb / 11-byte live records), L0 tables, L1
-subsumption, compaction trigger 3, memtable limit 512, the four fault kinds,
-and the op-log model with prefix truncation after crashes.
+group-commit WAL (10-byte tomb / 11-byte live records, batch records), L0
+tables, L1 subsumption, compaction trigger 3, memtable limit 512, the four
+fault kinds, and the op-log model with prefix truncation after crashes. A
+batch is one op boundary (one WAL record), so no prefix may split it.
 
 Dev tool, not part of the library: run `python -I tools/sim_crash.py` (single
 seed) or loop over seeds to validate the crash-consistency design against the
@@ -24,8 +25,12 @@ def size_of(value):
     return 1 + (1 if value is not None else 0) + 24
 
 def rec_bytes(r):
-    # len varint(1) + crc(4) + op(1) + seq(1) + kl(1) + key(1) + vl(1) [+ val(1)]
-    return 1 + 4 + 1 + 1 + 1 + 1 + 1 + (0 if r[1] is None else 1)
+    if len(r) == 3:
+        # len varint(1) + crc(4) + op(1) + seq(1) + kl(1) + key(1) + vl(1) [+ val(1)]
+        return 1 + 4 + 1 + 1 + 1 + 1 + 1 + (0 if r[1] is None else 1)
+    # batch: len(1) + crc(4) + op(1) + seq(1) + n(1) + per entry op(1)+kl(1)+key(1)+vl(1)[+val(1)]
+    _op, base, entries = r
+    return 1 + 4 + 1 + 1 + 1 + sum(4 + (0 if v is None else 1) for _k, v in entries)
 
 class DB:
     def __init__(self, storage, opts):
@@ -113,11 +118,21 @@ class DB:
         wal = self.storage.get('WAL')
         self.wal_buf = list(wal) if wal is not None else []
         S = best[1] if best else 0
-        for key, value, seq in self.wal_buf:
-            if seq <= S:
-                continue
-            self.memtable[key] = (value, seq)
-            self.size += size_of(value)
+        for rec in self.wal_buf:
+            if rec[0] != 'BATCH':
+                key, value, seq = rec
+                if seq <= S:
+                    continue
+                self.memtable[key] = (value, seq)
+                self.size += size_of(value)
+            else:
+                _op, base, entries = rec
+                for i, (key, value) in enumerate(entries):
+                    seq = base + i
+                    if seq <= S:
+                        continue
+                    self.memtable[key] = (value, seq)
+                    self.size += size_of(value)
         mem_seq = max((s for _v, s in self.memtable.values()), default=0)
         self.next_seq = max(mem_seq, max_table_seq) + 1
 
@@ -130,6 +145,18 @@ class DB:
         self.memtable[key] = (value, seq)
         self.size += size_of(value)
         self.wal_buf.append((key, value, seq))
+        if self.size >= self.opts['memtable_limit']:
+            self.flush(fp)
+
+    def batch(self, entries, fp=None):
+        base = self.next_seq
+        self.next_seq += len(entries)
+        for i, (key, value) in enumerate(entries):
+            if key in self.memtable:
+                self.size -= size_of(self.memtable[key][0])
+            self.memtable[key] = (value, base + i)
+            self.size += size_of(value)
+        self.wal_buf.append(('BATCH', base, list(entries)))
         if self.size >= self.opts['memtable_limit']:
             self.flush(fp)
 
@@ -214,11 +241,12 @@ class DB:
 
 def replay(ops, s):
     m = {}
-    for k, v in ops[:s]:
-        if v is None:
-            m.pop(k, None)
-        else:
-            m[k] = v
+    for entries in ops[:s]:
+        for k, v in entries:
+            if v is None:
+                m.pop(k, None)
+            else:
+                m[k] = v
     return m
 
 
@@ -233,21 +261,28 @@ def run_case(seed, trace=True, stop_at=None):
         x = xorshift(x)
         r = x
         key = (r >> 4) % 8
-        op = r % 10
+        op = r % 12
         fp = {'kind': None, 'prefix': None}
         if op < 5:
             value = (r >> 8) % 256
             db.put(key, value)
-            ops.append((key, value))
+            ops.append([(key, value)])
             exact = True
         elif op < 7:
             db.put(key, None)
-            ops.append((key, None))
+            ops.append([(key, None)])
             exact = True
         elif op == 7:
-            db.flush()
+            key2 = key ^ 1
+            v1 = (r >> 8) % 256
+            v2 = (r >> 16) % 256
+            db.batch([(key, v1), (key2, v2)])
+            ops.append([(key, v1), (key2, v2)])
             exact = True
         elif op == 8:
+            db.flush()
+            exact = True
+        elif op == 9:
             db = DB(storage, opts)
             s = prefix_check(ops, db)
             ops = ops[:s]
@@ -255,7 +290,7 @@ def run_case(seed, trace=True, stop_at=None):
             exact = False
         else:
             db.put(key, 0x78)  # b"x"
-            ops.append((key, 0x78))
+            ops.append([(key, 0x78)])
             kind = (r >> 8) % 4
             if kind == 0:
                 fp = {'kind': 'LostWrite', 'prefix': None}

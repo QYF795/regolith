@@ -474,7 +474,9 @@ pub fn SstReader::get(self : SstReader, key : Bytes) -> Option[Option[Bytes]] ra
     if vl < 0 || pos.val + vl > end {
       raise DbError::Corrupt("sst: entry value out of range")
     }
-    let v = if vl == 0 {
+    // vl == 0 means a tombstone only when the tomb flag is set; a live
+    // entry with an empty value keeps Some(b"").
+    let v = if tomb == 1 && vl == 0 {
       None
     } else {
       let view = self.bytes[pos.val:pos.val + vl]
@@ -483,7 +485,7 @@ pub fn SstReader::get(self : SstReader, key : Bytes) -> Option[Option[Bytes]] ra
     }
     let cmp = key.lexical_compare(k.to_owned())
     if cmp == 0 {
-      return Some(if tomb == 1 { None } else { v })
+      return Some(v)
     }
     if cmp < 0 {
       return None
@@ -581,7 +583,8 @@ fn SstCursor::load(self : SstCursor) -> Unit {
     self.fail("sst: entry value out of range")
     return
   }
-  let value = if vl == 0 {
+  // Same rule as get: only tomb=1 with vl=0 is a tombstone.
+  let value = if tomb == 1 && vl == 0 {
     None
   } else {
     let view = self.reader.bytes[self.pos.val:self.pos.val + vl]
@@ -589,7 +592,7 @@ fn SstCursor::load(self : SstCursor) -> Unit {
     Some(view.to_owned())
   }
   self.entries_left.val = self.entries_left.val - 1
-  self.current.val = Some({ key: key, seq: seq, value: if tomb == 1 { None } else { value } })
+  self.current.val = Some({ key: key, seq: seq, value: value })
 }
 
 fn pos_bound(pos : Int, len : Int) -> Int {

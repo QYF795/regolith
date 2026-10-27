@@ -10,7 +10,15 @@
 //
 //   record  := len(varint) crc(u32 LE) payload
 //   payload := op(1B) seq(varint) kl(varint) key vl(varint) value
-//   op      := 1 (put) | 2 (delete; vl is always 0)
+//            | op(1B) seq(varint) n(varint) entry*
+//   entry   := op(1B) kl(varint) key vl(varint) value
+//   op      := 1 (put) | 2 (delete; vl is always 0) | 3 (batch)
+//
+// A batch record carries n entries whose sequence numbers are exactly
+// seq..seq+n-1; the whole batch lives in one record, so recovery's
+// valid-prefix rule replays it entirely or not at all (atomicity). A put
+// with an empty value encodes as op 1 with vl = 0 — only op 2 turns vl 0
+// into a tombstone.
 //
 // Recovery reads records in order and stops at the first one whose length
 // or checksum does not check out — the torn tail of an interrupted write —
@@ -41,6 +49,38 @@ pub fn Wal::append(self : Wal, key : Bytes, value : Option[Bytes], seq : UInt64)
   let op = if value is None { 2 } else { 1 }
   payload.write_byte(op.to_byte())
   put_varint(payload, seq)
+  put_entry(payload, key, value)
+  let p = payload.to_bytes()
+  put_varint(self.buf, p.length().to_uint64())
+  write_u32_le(self.buf, crc32(p))
+  self.buf.write_bytes(p)
+}
+
+/// Appends one batch record: `ops` share the contiguous sequence range
+/// base..base+n-1 and are replayed together on recovery.
+pub fn Wal::append_batch(
+  self : Wal,
+  ops : Array[(Bytes, Option[Bytes])],
+  base : UInt64
+) -> Unit {
+  let payload = @buffer.Buffer(size_hint=64)
+  payload.write_byte((3).to_byte())
+  put_varint(payload, base)
+  put_varint(payload, ops.length().to_uint64())
+  for i = 0; i < ops.length(); i = i + 1 {
+    let (key, value) = ops[i]
+    put_entry(payload, key, value)
+  }
+  let p = payload.to_bytes()
+  put_varint(self.buf, p.length().to_uint64())
+  write_u32_le(self.buf, crc32(p))
+  self.buf.write_bytes(p)
+}
+
+/// Encodes one op(1B) kl(varint) key vl(varint) value entry.
+fn put_entry(payload : @buffer.Buffer, key : Bytes, value : Option[Bytes]) -> Unit {
+  let op = if value is None { 2 } else { 1 }
+  payload.write_byte(op.to_byte())
   put_varint(payload, key.length().to_uint64())
   payload.write_bytes(key)
   match value {
@@ -50,10 +90,6 @@ pub fn Wal::append(self : Wal, key : Bytes, value : Option[Bytes], seq : UInt64)
       payload.write_bytes(v)
     }
   }
-  let p = payload.to_bytes()
-  put_varint(self.buf, p.length().to_uint64())
-  write_u32_le(self.buf, crc32(p))
-  self.buf.write_bytes(p)
 }
 
 pub fn Wal::encode(self : Wal) -> Bytes {
@@ -107,24 +143,75 @@ pub fn parse_wal(bytes : Bytes) -> (Array[WalRecord], Int) {
         cont = false
         continue
       }
-      Some(r) => r
+      Some(rs) => rs
     }
-    records.push(record)
+    for r in record {
+      records.push(r)
+    }
   }
   (records, pos.val)
 }
 
-fn decode_payload(payload : BytesView) -> Option[WalRecord] {
+fn decode_payload(payload : BytesView) -> Option[Array[WalRecord]] {
   let op = payload[0].to_int()
-  if op != 1 && op != 2 {
+  if op != 1 && op != 2 && op != 3 {
     return None
   }
   let owned = payload.to_owned()
   let p = Ref(1)
+  if op == 3 {
+    let base = match try_varint(owned, p) {
+      None => return None
+      Some(v) => v
+    }
+    let n = match try_varint(owned, p) {
+      None => return None
+      Some(v) => v.to_int()
+    }
+    if n < 1 {
+      return None
+    }
+    let out : Array[WalRecord] = []
+    for i = 0; i < n; i = i + 1 {
+      match decode_entry(payload, p.val, base + i.to_uint64()) {
+        None => return None
+        Some((r, next)) => {
+          out.push(r)
+          p.val = next
+        }
+      }
+    }
+    if p.val != payload.length() {
+      return None
+    }
+    return Some(out)
+  }
   let seq = match try_varint(owned, p) {
     None => return None
     Some(v) => v
   }
+  match decode_entry(payload, p.val, seq) {
+    None => None
+    Some((r, next)) => {
+      if next != payload.length() {
+        return None
+      }
+      Some([r])
+    }
+  }
+}
+
+/// Decodes one entry (kl key vl value) starting at `start` with the given
+/// sequence number; returns the record and the position after it. `vl = 0`
+/// means a tombstone only for op 2 — a put of an empty value keeps
+/// `Some(b"")`.
+fn decode_entry(payload : BytesView, start : Int, seq : UInt64) -> Option[(WalRecord, Int)] {
+  let op = payload[start].to_int()
+  if op != 1 && op != 2 {
+    return None
+  }
+  let owned = payload.to_owned()
+  let p = Ref(start + 1)
   let kl = match try_varint(owned, p) {
     None => return None
     Some(v) => v.to_int()
@@ -141,7 +228,7 @@ fn decode_payload(payload : BytesView) -> Option[WalRecord] {
   if vl < 0 || p.val + vl > payload.length() {
     return None
   }
-  let value = if vl == 0 {
+  let value = if op == 2 && vl == 0 {
     None
   } else {
     let view = payload[p.val:p.val + vl]
@@ -151,5 +238,5 @@ fn decode_payload(payload : BytesView) -> Option[WalRecord] {
   if op == 2 && value is Some(_) {
     return None
   }
-  Some({ key, seq, value })
+  Some(({ key, seq, value }, p.val))
 }
