@@ -63,6 +63,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 8 | L2 覆盖语义：恢复时 L2 覆盖旧 L2/L1/L0 与 WAL 中 ≤ 水位线的记录 | ✅ | `db recovery drops tables and wal covered by l2`（混合 L1_3/L2_5/L0/WAL 场景） |
 | 9 | 分层压缩的崩溃一致性（含 L2 撕裂写故障） | ✅ | `crash consistency: 200 seeds x 40 steps`（故障空间扩至 5 类，含 TornWrite L2_）+ `tools/sim_crash.py`（独立模拟器同步三层策略，同 200 种子） |
 | 10 | 存储格式与恢复算法文档同步三层 | ✅ | [docs/format.md](format.md) §1/§6/§7 |
+| 11 | mooncakes.io 发布（`moon add QYF795/regolith`） | ✅ | `moon publish` 200 OK；消费方验证：新建工程 `moon add` 后 open/put/WriteBatch/scan_range 端到端可用 |
 
 ## 复现步骤
 
