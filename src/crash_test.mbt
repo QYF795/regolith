@@ -5,7 +5,7 @@
 // mutate the database (single writes or atomic batches), flush, or simulate
 // a crash: plain power loss (the Db is dropped mid-write), or a fault
 // injected into the WAL / table write path (LostWrite on the WAL seal,
-// TornWrite on the WAL seal, TornWrite on an L0 table write).
+// TornWrite on the WAL seal, TornWrite on an L0 / L1 / L2 table write).
 //
 // After a crash the Db is reopened on the same storage and its full state
 // must equal the model replayed over *some* prefix of the operation log —
@@ -125,8 +125,12 @@ fn dump_db(db : Db) -> String raise DbError {
     Some(n) => n
     None => "None"
   }
+  let l2 = match db.l2_name.val {
+    Some(n) => n
+    None => "None"
+  }
   let mut s =
-    "mem_bytes=\{db.memtable.size_bytes()} wal=\{db.wal.length()} l0=\{db.l0_names.val.length()} l1=\{l1}\nmem:"
+    "mem_bytes=\{db.memtable.size_bytes()} wal=\{db.wal.length()} l0=\{db.l0_names.val.length()} l1=\{l1} l2=\{l2}\nmem:"
   let mi = db.memtable.iter()
   while true {
     match mi.peek() {
@@ -206,6 +210,7 @@ fn run_case(seed : UInt64) -> Unit raise DbError {
   let opts = Options::default()
     .with_memtable_limit(512)
     .with_compaction_trigger(3)
+    .with_l2_size_trigger(20)
   let mut db = Db::open_with_options(Storage::Failpoint(fp), opts)
   let mut ops : Array[Op] = []
   let rng = Ref(seed)
@@ -243,15 +248,17 @@ fn run_case(seed : UInt64) -> Unit raise DbError {
       // fault crash: arm a write fault, flush into it, drop, reopen
       db.put(key, b"x")
       ops.push({ entries: [(key, Some(b"x"))] })
-      let kind = (r >> 8) % 4
+      let kind = (r >> 8) % 5
       if kind == 0 {
         fp.arm(FaultKind::LostWrite)
       } else if kind == 1 {
         fp.arm_on(FaultKind::TornWrite, "WAL")
       } else if kind == 2 {
         fp.arm_on(FaultKind::TornWrite, "L0_")
-      } else {
+      } else if kind == 3 {
         fp.arm_on(FaultKind::TornWrite, "L1_")
+      } else {
+        fp.arm_on(FaultKind::TornWrite, "L2_")
       }
       // The fault fires on the next matching write (the flush's WAL seal or
       // table write); a flush that never reaches the armed file simply

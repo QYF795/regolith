@@ -10,12 +10,12 @@
 
 ## 特性
 
-- **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 合并压缩
+- **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 分级合并压缩（L0 → L1 → L2）
 - **原子批量写**：`Db::write(WriteBatch)` 一次提交多键，WAL 单条记录承载，恢复时整批全有或全无
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
-- **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite
+- **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite（WAL / L0 / L1 / L2）
 - **三后端 CI**：js / wasm-gc / native 测试全绿，`moon check` 零警告
 
 ## 快速开始
@@ -38,7 +38,7 @@ moon run --target js src/cli -- stats
 
 命令：`set <key> <value>` / `get <key>` / `del <key>` / `scan` /
 `scan_prefix <prefix>` / `scan_range <start> <end>`（end 为空串 = 无上界）/
-`flush` / `compact` / `stats`。`set`/`del` 返回
+`flush` / `compact`（归并全部数据到底层 L2）/ `stats`。`set`/`del` 返回
 `ok` 时数据已落盘。数据目录 `regolith-data/` 已 git-ignore。
 
 ## API

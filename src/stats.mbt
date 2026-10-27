@@ -9,6 +9,12 @@ pub(all) struct Stats {
   wal_bytes : Int
   /// Number of L0 tables on disk.
   l0_files : Int
-  /// Number of L1 tables on disk (0 or 1: compaction is full-merge).
+  /// Number of L1 tables on disk (0 or 1: L1 compaction is a full merge).
   l1_files : Int
+  /// Byte size of the current L1 table, if any.
+  l1_bytes : Int
+  /// Number of L2 tables on disk (0 or 1: the bottom level).
+  l2_files : Int
+  /// Byte size of the current L2 table, if any.
+  l2_bytes : Int
 }

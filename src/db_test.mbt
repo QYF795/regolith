@@ -137,7 +137,9 @@ test "db compaction keeps newest value across tables" {
   let st = db.stats()
   assert_true(st.l0_files == 0)
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
-  assert_true(db2.get(b"a") is None)
+  // L1 is a non-bottom merge: the tombstone survives and reads as deleted
+  // (it still has to cover older data in L2).
+  assert_true(db2.get(b"a") == Some(None))
 }
 
 test "db recovery drops stale l0 covered by l1" {
@@ -456,4 +458,110 @@ test "db put of empty value is not a tombstone" {
   db.flush()
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
   assert_true(db2.get(b"k") == Some(Some(b"")))
+}
+
+test "db l2 compaction merges l1 into l2" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default()
+    .with_compaction_trigger(2)
+    .with_l2_size_trigger(20)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.flush()
+  db.put(b"b", b"2")
+  db.flush() // trigger 2: L1 merge, then L2 (tiny trigger) -> everything in L2
+  let st = db.stats()
+  assert_true(st.l2_files == 1)
+  assert_true(st.l1_files == 0)
+  assert_true(st.l0_files == 0)
+  // More writes pile up through L1 and into L2 again.
+  db.put(b"c", b"3")
+  db.flush()
+  db.put(b"d", b"4")
+  db.flush()
+  assert_true(db.stats().l2_files == 1)
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  assert_true(db2.get(b"c") == Some(Some(b"3")))
+  assert_true(db2.get(b"d") == Some(Some(b"4")))
+}
+
+test "db l1 tombstone covers l2 until bottom compaction" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db.put(b"a", b"1")
+  db.flush()
+  db.compact()
+  db.compact_l2() // a@1 lands in L2
+  db.delete(b"a")
+  db.flush()
+  db.compact() // non-bottom: the tombstone stays in L1
+  assert_true(db.stats().l1_files == 1)
+  assert_true(db.stats().l2_files == 1)
+  // L1's tombstone covers the older live copy in L2.
+  assert_true(db.get(b"a") == Some(None))
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(None))
+  // The bottom merge drops the tombstone for good.
+  db2.compact_l2()
+  assert_true(db2.get(b"a") is None)
+}
+
+test "db recovery drops tables and wal covered by l2" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush() // L0_000000: a@1, b@2
+  // Simulate a bottom compaction that landed L2_5.sst (covering every seq
+  // <= 5: L0 a/b and an L1_3) but crashed before deleting the inputs, plus
+  // a newer L0 that outlives the watermark.
+  let l1_b = SstBuilder::new()
+  l1_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
+  l1_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
+  l1_b.add({ key: b"c", seq: 3UL, value: Some(b"3") })
+  write(Storage::Memory(ms), "L1_3.sst", l1_b.finish())
+  let l2_b = SstBuilder::new()
+  l2_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
+  l2_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
+  l2_b.add({ key: b"c", seq: 3UL, value: Some(b"3") })
+  l2_b.add({ key: b"d", seq: 4UL, value: Some(b"4") })
+  l2_b.add({ key: b"e", seq: 5UL, value: Some(b"5") })
+  write(Storage::Memory(ms), "L2_5.sst", l2_b.finish())
+  let l0_b = SstBuilder::new()
+  l0_b.add({ key: b"f", seq: 6UL, value: Some(b"6") })
+  write(Storage::Memory(ms), "L0_000001.sst", l0_b.finish())
+  // A stale WAL (seq <= 5) plus a fresh record beyond the watermark.
+  let wal = Wal::new()
+  wal.append(b"a", Some(b"stale"), 1UL)
+  wal.append(b"g", Some(b"7"), 7UL)
+  write(Storage::Memory(ms), "WAL", wal.encode())
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.stats().l2_files == 1)
+  assert_true(db2.stats().l1_files == 0) // L1_3 covered by L2_5
+  assert_true(db2.stats().l0_files == 1) // L0_000001 (f@6) survives
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"e") == Some(Some(b"5")))
+  assert_true(db2.get(b"f") == Some(Some(b"6")))
+  assert_true(db2.get(b"g") == Some(Some(b"7")))
+}
+
+test "db compact_l2 drops all tombstones and empties the store" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_compaction_trigger(2)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.delete(b"a")
+  db.delete(b"b")
+  db.flush()
+  db.compact_l2()
+  let st = db.stats()
+  assert_true(st.l0_files == 0)
+  assert_true(st.l1_files == 0)
+  assert_true(st.l2_files == 0)
+  assert_true(db.get(b"a") is None)
+  assert_true(db.get(b"b") is None)
 }

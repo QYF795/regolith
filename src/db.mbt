@@ -6,13 +6,20 @@
 //   WAL       — group-commit log of those same writes, buffered in memory and
 //               sealed to storage as one whole file on flush
 //   L0        — tables flushed from the memtable, one per flush
-//   L1        — at most one full-merge compaction output table
+//   L1        — at most one compaction output table merging memtable + L0 +
+//               L1 (non-bottom: tombstones are retained so they keep covering
+//               older data in L2)
+//   L2        — at most one bottom table; merged from L0 + L1 + L2 once L1
+//               grows past l2_size_trigger and the L1/L2 size ratio
+//               (tombstones suppressed: nothing below remains to cover)
 //
 // Recovery (docs/format.md §6, docs/acceptance.md §8):
 //   * every surviving table must pass SST validation; torn ones are dropped
-//   * the newest L1 (largest S) subsumes every table entry with seq <= S —
-//     such L0 tables are dropped entirely and WAL records <= S are skipped,
-//     so a replayed database is exactly "checkpoint ∪ one WAL prefix"
+//   * the newest L2 (largest S) subsumes every entry with seq <= S in L0/L1
+//     (and older L2s); the newest L1 likewise subsumes L0 entries with
+//     seq <= S — covered tables are dropped and WAL records <= max(S1, S2)
+//     are skipped, so a replayed database is exactly "checkpoint ∪ one WAL
+//     prefix"
 //   * WAL records are replayed into the memtable; the torn tail of the WAL
 //     file is truncated to the last valid record
 //
@@ -32,6 +39,11 @@ pub(all) struct Db {
   l1_seq : Ref[Option[UInt64]]
   l1_name : Ref[Option[String]]
   l1_reader : Ref[Option[SstReader]]
+  l2_seq : Ref[Option[UInt64]]
+  l2_name : Ref[Option[String]]
+  l2_reader : Ref[Option[SstReader]]
+  l1_bytes : Ref[Int]
+  l2_bytes : Ref[Int]
 }
 
 /// Opens a database over the given storage, recovering its state.
@@ -49,6 +61,11 @@ pub fn Db::open_with_options(storage : Storage, opts : Options) -> Db raise DbEr
     l1_seq: Ref(None),
     l1_name: Ref(None),
     l1_reader: Ref(None),
+    l2_seq: Ref(None),
+    l2_name: Ref(None),
+    l2_reader: Ref(None),
+    l1_bytes: Ref(0),
+    l2_bytes: Ref(0),
   }
   db.recover()
   db
@@ -149,6 +166,17 @@ pub fn Db::get(self : Db, key : Bytes) -> Option[Option[Bytes]] raise DbError {
   match self.l1_reader.val {
     Some(r) => {
       if r.may_contain(key) {
+        match r.get(key) {
+          Some(v) => return Some(v)
+          None => ()
+        }
+      }
+    }
+    None => ()
+  }
+  match self.l2_reader.val {
+    Some(r) => {
+      if r.may_contain(key) {
         r.get(key)
       } else {
         None
@@ -166,6 +194,10 @@ pub fn Db::scan(self : Db) -> MergeIterator {
     streams.push(Stream::Sst(r.cursor()))
   }
   match self.l1_reader.val {
+    Some(r) => streams.push(Stream::Sst(r.cursor()))
+    None => ()
+  }
+  match self.l2_reader.val {
     Some(r) => streams.push(Stream::Sst(r.cursor()))
     None => ()
   }
@@ -222,15 +254,21 @@ pub fn Db::flush(self : Db) -> Unit raise DbError {
   write(self.storage, "WAL", self.wal.encode())
   // 5. Swap in a fresh memtable.
   self.memtable = MemTable::new()
-  // 6. Compaction once enough L0 tables have piled up.
+  // 6. L1 compaction once enough L0 tables have piled up, then an L2
+  //    compaction if L1 has grown past the size trigger and ratio.
   if self.l0_names.val.length() >= self.opts.l0_compaction_trigger {
     self.compact()
+    self.maybe_compact_l2()
   }
 }
 
-/// Full-merges the memtable, every L0 table and the current L1 into a single
+/// Merges the memtable, every L0 table and the current L1 into a single
 /// L1_<S> table, where S is the largest sequence number it contains. The new
 /// table is written and validated before any old file is removed.
+///
+/// This is a *non-bottom* merge: tombstones are retained (MergeIterator
+/// `next_raw`) because L2 may still hold older versions of a deleted key —
+/// dropping the tombstone here would resurrect them.
 pub fn Db::compact(self : Db) -> Unit raise DbError {
   let streams : Array[Stream] = []
   streams.push(Stream::Mem(self.memtable.iter()))
@@ -246,7 +284,7 @@ pub fn Db::compact(self : Db) -> Unit raise DbError {
   let mut max_seq = 0UL
   let mut any = false
   while true {
-    match it.next() {
+    match it.next_raw() {
       None => break
       Some(e) => {
         if e.seq > max_seq {
@@ -261,9 +299,6 @@ pub fn Db::compact(self : Db) -> Unit raise DbError {
     Some(err) => raise err
     None => ()
   }
-  // The merge iterator suppresses tombstones; under a full merge that is
-  // sound: the old tables are deleted after the new one lands, so there is
-  // nothing left for a dropped tombstone to cover.
   let old_names : Array[String] = []
   for n in self.l0_names.val {
     old_names.push(n)
@@ -287,14 +322,72 @@ pub fn Db::compact(self : Db) -> Unit raise DbError {
     self.l1_seq.val = Some(s)
     self.l1_name.val = Some(name)
     self.l1_reader.val = Some(reader)
+    self.l1_bytes.val = bytes.length()
   } else {
-    // Everything merged away (all tombstones). There is no table to write,
-    // so just drop the old files; recovery without a new L1 keeps any
-    // surviving old tables, whose tombstones still read correctly.
+    // No inputs at all: nothing to write, nothing changes.
+    self.l1_bytes.val = 0
+  }
+}
+
+/// The bottom merge: memtable + every L0 + L1 + the current L2 into a single
+/// L2_<S> table. Tombstones are suppressed here — every older version is in
+/// the merge, so nothing is left for a dropped tombstone to cover. The new
+/// table lands (and validates) before any input file is removed; its S
+/// becomes the coverage watermark every level checks against on recovery.
+pub fn Db::compact_l2(self : Db) -> Unit raise DbError {
+  let streams : Array[Stream] = []
+  streams.push(Stream::Mem(self.memtable.iter()))
+  for r in self.l0_readers.val {
+    streams.push(Stream::Sst(r.cursor()))
+  }
+  match self.l1_reader.val {
+    Some(r) => streams.push(Stream::Sst(r.cursor()))
+    None => ()
+  }
+  match self.l2_reader.val {
+    Some(r) => streams.push(Stream::Sst(r.cursor()))
+    None => ()
+  }
+  let it = MergeIterator::new(streams)
+  let builder = SstBuilder::new(block_size=self.opts.block_size)
+  let mut max_seq = 0UL
+  let mut any = false
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => {
+        if e.seq > max_seq {
+          max_seq = e.seq
+        }
+        builder.add(e)
+        any = true
+      }
+    }
+  }
+  match it.error() {
+    Some(err) => raise err
+    None => ()
+  }
+  let old_names : Array[String] = []
+  for n in self.l0_names.val {
+    old_names.push(n)
+  }
+  let old_l1 = self.l1_name.val
+  let old_l2 = self.l2_name.val
+  if any {
+    let s = max_seq
+    let name = "L2_\{s}.sst"
+    let bytes = builder.finish()
+    write(self.storage, name, bytes)
+    let reader = parse(bytes)
     for n in old_names {
       remove(self.storage, n)
     }
     match old_l1 {
+      Some(n) => remove(self.storage, n)
+      None => ()
+    }
+    match old_l2 {
       Some(n) => remove(self.storage, n)
       None => ()
     }
@@ -303,6 +396,48 @@ pub fn Db::compact(self : Db) -> Unit raise DbError {
     self.l1_seq.val = None
     self.l1_name.val = None
     self.l1_reader.val = None
+    self.l1_bytes.val = 0
+    self.l2_seq.val = Some(s)
+    self.l2_name.val = Some(name)
+    self.l2_reader.val = Some(reader)
+    self.l2_bytes.val = bytes.length()
+  } else {
+    // Everything merged away (all tombstones). No table to write: dropping
+    // the old files leaves the store empty, and recovery without a new L2
+    // keeps any surviving old tables, whose tombstones read correctly.
+    for n in old_names {
+      remove(self.storage, n)
+    }
+    match old_l1 {
+      Some(n) => remove(self.storage, n)
+      None => ()
+    }
+    match old_l2 {
+      Some(n) => remove(self.storage, n)
+      None => ()
+    }
+    self.l0_names.val = []
+    self.l0_readers.val = []
+    self.l1_seq.val = None
+    self.l1_name.val = None
+    self.l1_reader.val = None
+    self.l1_bytes.val = 0
+    self.l2_seq.val = None
+    self.l2_name.val = None
+    self.l2_reader.val = None
+    self.l2_bytes.val = 0
+  }
+}
+
+/// Runs an L2 compaction once L1 has grown to `l2_size_trigger` bytes and
+/// to at least 1/`l2_size_ratio` of L2 — the size ratio keeps write
+/// amplification bounded: a large cold bottom table is not rewritten every
+/// time a little fresh data piles up.
+fn Db::maybe_compact_l2(self : Db) -> Unit raise DbError {
+  let l1 = self.l1_bytes.val
+  let l2 = self.l2_bytes.val
+  if l1 >= self.opts.l2_size_trigger && (l2 == 0 || l1 * self.opts.l2_size_ratio >= l2) {
+    self.compact_l2()
   }
 }
 
@@ -317,6 +452,9 @@ pub fn Db::stats(self : Db) -> Stats {
     wal_bytes: self.wal.length(),
     l0_files: self.l0_names.val.length(),
     l1_files: if self.l1_reader.val is Some(_) { 1 } else { 0 },
+    l1_bytes: self.l1_bytes.val,
+    l2_files: if self.l2_reader.val is Some(_) { 1 } else { 0 },
+    l2_bytes: self.l2_bytes.val,
   }
 }
 
@@ -324,10 +462,49 @@ pub fn Db::stats(self : Db) -> Stats {
 fn Db::recover(self : Db) -> Unit raise DbError {
   let l0_names = list(self.storage, "L0_")
   let l1_names = list(self.storage, "L1_")
-  // Newest valid L1 wins: larger S subsumes smaller.
+  let l2_names = list(self.storage, "L2_")
+  // Newest valid L2 wins: larger S subsumes smaller (and covers L0/L1).
+  let mut best_l2_s = 0UL
+  let mut best_l2_name = ""
+  let mut best_l2_reader : Option[SstReader] = None
+  let mut best_l2_bytes = 0
+  for name in l2_names {
+    match parse_decimal(name, 3, name.length() - 7) {
+      None => remove(self.storage, name)
+      Some(s) => match read(self.storage, name) {
+        None => ()
+        Some(bytes) => {
+          let parsed = try {
+            Some(parse(bytes))
+          } catch {
+            _ => None
+          }
+          match parsed {
+            None => remove(self.storage, name)
+            Some(r) => {
+              if s > best_l2_s {
+                best_l2_s = s
+                best_l2_name = name
+                best_l2_reader = Some(r)
+                best_l2_bytes = bytes.length()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  for name in l2_names {
+    if name != best_l2_name {
+      remove(self.storage, name)
+    }
+  }
+  // Newest valid L1 wins among L1 files, but an L1 entirely covered by L2
+  // (S <= L2's S) is stale: it was merged into L2 and can be dropped.
   let mut best_s = 0UL
   let mut best_name = ""
   let mut best_reader : Option[SstReader] = None
+  let mut best_bytes = 0
   for name in l1_names {
     match parse_decimal(name, 3, name.length() - 7) {
       None => remove(self.storage, name)
@@ -346,6 +523,7 @@ fn Db::recover(self : Db) -> Unit raise DbError {
                 best_s = s
                 best_name = name
                 best_reader = Some(r)
+                best_bytes = bytes.length()
               }
             }
           }
@@ -358,9 +536,16 @@ fn Db::recover(self : Db) -> Unit raise DbError {
       remove(self.storage, name)
     }
   }
-  // L0 tables: drop torn ones, and drop tables fully covered by L1.
+  if best_reader is Some(_) && best_l2_reader is Some(_) && best_s <= best_l2_s {
+    remove(self.storage, best_name)
+    best_s = 0UL
+    best_name = ""
+    best_reader = None
+    best_bytes = 0
+  }
+  // L0 tables: drop torn ones, and drop tables fully covered by L1 or L2.
   let mut max_l0_num = -1
-  let mut max_table_seq = best_s
+  let mut max_table_seq = if best_s > best_l2_s { best_s } else { best_l2_s }
   for name in l0_names {
     match parse_decimal(name, 3, name.length() - 7) {
       None => {
@@ -384,7 +569,8 @@ fn Db::recover(self : Db) -> Unit raise DbError {
               None => remove(self.storage, name)
               Some(r) => {
                 let m = max_seq_of(r)
-                let covered = best_reader is Some(_) && m <= best_s
+                let covered = (best_reader is Some(_) && m <= best_s) ||
+                  (best_l2_reader is Some(_) && m <= best_l2_s)
                 if covered {
                   remove(self.storage, name)
                 } else {
@@ -407,10 +593,21 @@ fn Db::recover(self : Db) -> Unit raise DbError {
       self.l1_seq.val = Some(best_s)
       self.l1_name.val = Some(best_name)
       self.l1_reader.val = Some(r)
+      self.l1_bytes.val = best_bytes
     }
     None => ()
   }
-  // WAL: replay the valid prefix; skip records the L1 already covers.
+  match best_l2_reader {
+    Some(r) => {
+      self.l2_seq.val = Some(best_l2_s)
+      self.l2_name.val = Some(best_l2_name)
+      self.l2_reader.val = Some(r)
+      self.l2_bytes.val = best_l2_bytes
+    }
+    None => ()
+  }
+  // WAL: replay the valid prefix; skip records the tables already cover.
+  let cover_s = if best_s > best_l2_s { best_s } else { best_l2_s }
   match read(self.storage, "WAL") {
     None => ()
     Some(bytes) => {
@@ -420,15 +617,15 @@ fn Db::recover(self : Db) -> Unit raise DbError {
         write(self.storage, "WAL", bytes[0:valid].to_owned())
       }
       for r in records {
-        if best_reader is Some(_) && r.seq <= best_s {
+        if r.seq <= cover_s {
           continue
         }
         self.memtable.put(r.key, r.value, r.seq)
       }
     }
   }
-  // The next sequence must clear everything recovered: the tables (L1's S
-  // and every surviving L0), plus anything replayed from the WAL.
+  // The next sequence must clear everything recovered: the tables (L1's and
+  // L2's S and every surviving L0), plus anything replayed from the WAL.
   let mem_seq = self.memtable.max_seq()
   let top = if mem_seq > max_table_seq { mem_seq } else { max_table_seq }
   self.next_seq.val = top + 1UL

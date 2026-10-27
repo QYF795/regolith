@@ -46,6 +46,9 @@ test "clicore flush and compact" {
   assert_true(db.stats().l1_files == 1)
   assert_true(db.stats().l0_files == 0)
   assert_true(run(db, ["compact"]) == "ok")
+  // Manual compaction merges everything into the bottom level.
+  assert_true(db.stats().l1_files == 0)
+  assert_true(db.stats().l2_files == 1)
   // Entries survive the manual compaction.
   assert_true(run(db, ["get", "a"]) == "1")
   assert_true(run(db, ["get", "b"]) == "2")

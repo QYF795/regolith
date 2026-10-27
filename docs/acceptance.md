@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**51 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**67 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -48,6 +48,21 @@ C 编译器，由 CI 验证，见 §M2）。
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
 | 8 | CI：三后端测试 + 静态检查 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py`） |
 | 9 | 无第三方依赖（仅 moonbitlang 官方 core / x） | ✅ | moon.mod 仅依赖 `moonbitlang/x` |
+
+## M3 — 查询与写入增强 + 分级压缩（11 月轮核心交付）
+
+| # | 验收项 | 状态 | 证明 |
+|---|---|---|---|
+| 1 | 区间迭代 `scan_range(start, end)`：字节字典序下返回 [start, end)，end 为空 = 无上界，提前终止不扫全库 | ✅ | `db scan_range returns keys within [start, end)`、`db scan_range with open upper bound` |
+| 2 | 范围扫描与墓碑语义、跨 reopen 持久一致 | ✅ | `db scan_range skips tombstones and reads across reopen` |
+| 3 | 全 0xFF 前缀无有限后继时的正确回退 | ✅ | `db scan_prefix all-FF prefix falls back to prefix check` |
+| 4 | CLI `scan_range` 命令 | ✅ | clicore_test.mbt；help 文本与用法错误提示 |
+| 5 | 原子批量写 `write(batch)`：任意多条 put/delete 一次提交，崩溃后整批要么全部重放要么全部丢弃 | ✅ | `db write batch applies all writes atomically`（含 flush + reopen）、`db torn batch record recovers to whole batch or nothing`；crash 套件中一批 = 一个前缀边界 |
+| 6 | 批内多写语义（后者胜）与空值边界 | ✅ | `db write batch last write wins within batch`、`db put of empty value is not a tombstone` |
+| 7 | 分级压缩 L0→L1→L2：L1 非底层归并保留墓碑（压制 L2 旧版本），L2 底层归并抑制墓碑 | ✅ | `db l2 compaction merges l1 into l2`、`db l1 tombstone covers l2 until bottom compaction`、`db compact_l2 drops all tombstones and empties the store` |
+| 8 | L2 覆盖语义：恢复时 L2 覆盖旧 L2/L1/L0 与 WAL 中 ≤ 水位线的记录 | ✅ | `db recovery drops tables and wal covered by l2`（混合 L1_3/L2_5/L0/WAL 场景） |
+| 9 | 分层压缩的崩溃一致性（含 L2 撕裂写故障） | ✅ | `crash consistency: 200 seeds x 40 steps`（故障空间扩至 5 类，含 TornWrite L2_）+ `tools/sim_crash.py`（独立模拟器同步三层策略，同 200 种子） |
+| 10 | 存储格式与恢复算法文档同步三层 | ✅ | [docs/format.md](format.md) §1/§6/§7 |
 
 ## 复现步骤
 

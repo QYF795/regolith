@@ -72,7 +72,7 @@ fn main {
     db.flush()
     let s = db.stats()
     println(
-      "[stats] memtable=\{s.memtable_bytes}B wal=\{s.wal_bytes}B l0=\{s.l0_files} l1=\{s.l1_files}",
+      "[stats] memtable=\{s.memtable_bytes}B wal=\{s.wal_bytes}B l0=\{s.l0_files} l1=\{s.l1_files} l2=\{s.l2_files}",
     )
     println("\n[close]")
     db.close()

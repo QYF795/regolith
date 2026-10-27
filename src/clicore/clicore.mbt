@@ -140,14 +140,15 @@ pub fn run(db : @regolith.Db, argv : Array[String]) -> String raise @regolith.Db
     }
     "compact" => {
       db.compact()
+      db.compact_l2()
       "ok"
     }
     "stats" => {
       let s = db.stats()
-      "memtable: \{s.memtable_bytes} bytes\nwal: \{s.wal_bytes} bytes\nl0: \{s.l0_files} tables\nl1: \{s.l1_files} tables"
+      "memtable: \{s.memtable_bytes} bytes\nwal: \{s.wal_bytes} bytes\nl0: \{s.l0_files} tables\nl1: \{s.l1_files} tables\nl2: \{s.l2_files} tables"
     }
     "help" =>
-      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  scan_range <a> <b> list entries with a <= key < b (empty b = unbounded)\n  flush              flush the memtable to L0\n  compact            merge everything into L1\n  stats              storage statistics\n  help               this help"
+      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  scan_range <a> <b> list entries with a <= key < b (empty b = unbounded)\n  flush              flush the memtable to L0\n  compact            merge everything into L2\n  stats              storage statistics\n  help               this help"
     _ => "error: unknown command \{argv[0]} (try \"help\")"
   }
 }
