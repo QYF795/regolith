@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**67 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**80 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -34,6 +34,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 7 | WAL 中已被 L1 覆盖的记录重放时跳过 | ✅ | `db recovery skips stale wal records covered by l1` |
 | 8 | SST 任意字节翻转 → 拒绝打开/读取，绝不静默错数据 | ✅ | `sstable corruption detected`（含 bloom 段翻转） |
 | 9 | 故障注入设施（单次触发、丢失写、撕裂写） | ✅ | `failpoint failread fires once`、`failpoint lost write only hits WAL` |
+| 10 | SST 语义损坏（键重复/乱序，CRC 不可见）→ 读取即 `Corrupt`，扫描报错、压缩拒绝归并传播 | ✅ | `sst cursor rejects duplicate keys as corrupt`、`sst cursor rejects out-of-order keys as corrupt`、`db refuses to propagate duplicate keys through scans and compaction` |
 
 ## M2 — 生态集成（读放大优化 + CLI/demo + 工程化）
 
@@ -64,6 +65,18 @@ C 编译器，由 CI 验证，见 §M2）。
 | 9 | 分层压缩的崩溃一致性（含 L2 撕裂写故障） | ✅ | `crash consistency: 200 seeds x 40 steps`（故障空间扩至 5 类，含 TornWrite L2_）+ `tools/sim_crash.py`（独立模拟器同步三层策略，同 200 种子） |
 | 10 | 存储格式与恢复算法文档同步三层 | ✅ | [docs/format.md](format.md) §1/§6/§7 |
 | 11 | mooncakes.io 发布（`moon add QYF795/regolith`） | ✅ | `moon publish` 200 OK；消费方验证：新建工程 `moon add` 后 open/put/WriteBatch/scan_range 端到端可用 |
+| 12 | 4 次 demo 式运行回归：L0→L1 压缩产出严格升序、无重复键（含快照参与的第 4 次 flush） | ✅ | `four demo-style runs compact to a unique ascending L1`、`snapshot before the fourth flush does not disturb compaction` |
+
+## M4 — 结项（快照与迭代器句柄）
+
+| # | 验收项 | 状态 | 证明 |
+|---|---|---|---|
+| 1 | `db.snapshot()` 冻结当前状态：活库继续写/删，快照读不变（含墓碑） | ✅ | `snapshot sees the state at creation while the db advances`、`snapshot sees tombstones frozen before creation` |
+| 2 | 快照上的 scan / scan_prefix / scan_range 与 Db 同构、视图冻结 | ✅ | `snapshot scan prefix and range see the frozen view` |
+| 3 | 快照读跨 flush、L1/L2 压缩仍正确（表钉住，延迟删除） | ✅ | `snapshot reads survive flush and compaction of the live db` |
+| 4 | 被快照钉住的旧表延迟删除，最后一个持有者 close 后物理清除 | ✅ | `compaction defers files held by snapshots until close`、`multiple snapshots release independently` |
+| 5 | 迭代器句柄语义：持有快照迭代器期间活库任意写/flush/压缩，句柄稳定输出冻结视图；可暂停（停止 next）可恢复（重开迭代器或从上次键 scan_range） | ✅ | `snapshot iterator is a stable handle across writes flush and compact` |
+| 6 | close 幂等；快照为纯内存概念，不改变磁盘格式与恢复算法 | ✅ | `snapshot close is idempotent and reads survive close`；docs/format.md §1 注记 |
 
 ## 复现步骤
 

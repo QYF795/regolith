@@ -12,6 +12,7 @@
 
 - **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 分级合并压缩（L0 → L1 → L2）
 - **原子批量写**：`Db::write(WriteBatch)` 一次提交多键，WAL 单条记录承载，恢复时整批全有或全无
+- **快照与迭代器句柄**：`Db::snapshot()` 冻结一致性视图，活库继续写/flush/压缩期间，快照上的读与迭代器保持同一视图，可暂停可恢复
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
@@ -64,6 +65,11 @@ fn main {
   // 多键一次原子提交（全有或全无）
   db.write(WriteBatch::new().put(b"a", b"1").delete(b"key"))
   db.flush()! // 主动落盘
+  // 快照：冻结当前状态；后续写入不影响快照上的读写
+  let snap = db.snapshot()
+  db.put(b"key", b"other")
+  inspect(snap.get(b"key")!) // 仍是 Some(Some(b"value"))
+  snap.close() // 释放快照钉住的表文件
 }
 ```
 

@@ -565,3 +565,122 @@ test "db compact_l2 drops all tombstones and empties the store" {
   assert_true(db.get(b"a") is None)
   assert_true(db.get(b"b") is None)
 }
+
+test "db refuses to propagate duplicate keys through scans and compaction" {
+  // A table with a repeated trailing key passes CRC but is semantically
+  // corrupt — the historical demo-data incident, where an old buggy build
+  // left a stray hello@1 at the end of an L0 table. Scans must surface it
+  // as Corrupt instead of silently re-yielding the duplicate, and
+  // compaction must refuse to merge the poison forward.
+  let b = SstBuilder::new()
+  b.add({ key: b"hello", seq: 1UL, value: Some(b"regolith") })
+  b.add({ key: b"lsm", seq: 3UL, value: Some(b"wal + memtable + sstable") })
+  b.add({ key: b"moon", seq: 4UL, value: None })
+  b.add({ key: b"hello", seq: 1UL, value: Some(b"regolith") })
+  let ms = MemoryStorage::new()
+  write(Storage::Memory(ms), "L0_000000.sst", b.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  let it = db.scan()
+  let mut n = 0
+  while true {
+    match it.next() {
+      None => break
+      Some(_) => n = n + 1
+    }
+  }
+  assert_true(n == 2, msg="scan yielded \{n} entries before the corrupt one")
+  match it.error() {
+    Some(DbError::Corrupt(_)) => ()
+    _ => abort("expected Corrupt from the duplicate-key table")
+  }
+  let r = try {
+    db.compact()
+    None
+  } catch {
+    e => Some(e)
+  }
+  match r {
+    Some(DbError::Corrupt(_)) => ()
+    _ => abort("expected compaction to raise Corrupt")
+  }
+  // Compaction wrote nothing; the poisoned table is still there untouched.
+  assert_true(list(Storage::Memory(ms), "L1_").length() == 0)
+}
+
+// Shared helper for the demo-sequence regression tests below: every entry
+// must be strictly greater than the previous one.
+fn check_unique_ascending(r : SstReader, what : String) -> Array[Entry] raise {
+  let es : Array[Entry] = []
+  let c = r.cursor()
+  while true {
+    match c.peek() {
+      None => break
+      Some(e) => {
+        es.push(e)
+        c.advance()
+      }
+    }
+  }
+  assert_true(c.error() is None)
+  for i = 1; i < es.length(); i = i + 1 {
+    assert_true(
+      es[i - 1].key.lexical_compare(es[i].key) < 0,
+      msg="\{what}: key \{es[i].key} not strictly after \{es[i - 1].key}",
+    )
+  }
+  es
+}
+
+test "four demo-style runs compact to a unique ascending L1" {
+  // Regression for the demo-data incident: four runs of the demo sequence
+  // (put hello/moon/lsm, delete moon, flush) pile up four L0 tables and
+  // trigger the automatic compaction. Every table along the way — and the
+  // final L1 — must hold strictly ascending, duplicate-free keys.
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  for round = 1; round <= 4; round = round + 1 {
+    db.put(b"hello", b"v\{round}")
+    db.put(b"moon", b"m\{round}")
+    db.put(b"lsm", b"l\{round}")
+    db.delete(b"moon")
+    db.flush()
+    for r in db.l0_readers.val {
+      let _ = check_unique_ascending(r, "L0")
+    }
+  }
+  match db.l1_reader.val {
+    Some(r) => {
+      let es = check_unique_ascending(r, "L1")
+      assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
+    }
+    None => abort("expected an L1 table after four flushes")
+  }
+}
+
+test "snapshot before the fourth flush does not disturb compaction" {
+  // The exact demo flow: a snapshot is created (and closed) right before the
+  // delete + flush that triggers compaction. The snapshot must not affect
+  // the compacted L1.
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  for round = 1; round <= 4; round = round + 1 {
+    db.put(b"hello", b"v\{round}")
+    db.put(b"moon", b"m\{round}")
+    db.put(b"lsm", b"l\{round}")
+    if round == 4 {
+      let snap = db.snapshot()
+      db.delete(b"moon")
+      snap.close()
+    } else {
+      db.delete(b"moon")
+    }
+    db.flush()
+  }
+  match db.l1_reader.val {
+    Some(r) => {
+      let es = check_unique_ascending(r, "L1")
+      assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
+    }
+    None => abort("expected an L1 table after four flushes")
+  }
+}

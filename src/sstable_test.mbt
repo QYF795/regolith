@@ -79,6 +79,44 @@ test "sstable corruption detected" {
   expect_corrupt(Bytes::from_array(arr2))
 }
 
+test "sst cursor rejects duplicate keys as corrupt" {
+  // Semantic corruption CRC cannot see: a table whose keys repeat. parse()
+  // only checks the block index, so the file opens; the cursor must fail
+  // instead of silently re-yielding the duplicate.
+  let b = SstBuilder::new()
+  b.add(entry(b"a", 1UL, Some(b"1")))
+  b.add(entry(b"b", 2UL, Some(b"2")))
+  b.add(entry(b"a", 3UL, Some(b"3")))
+  let r = parse(b.finish())
+  let c = r.cursor()
+  assert_true(c.peek().map(fn(e) { e.seq }) == Some(1UL))
+  c.advance()
+  assert_true(c.peek().map(fn(e) { e.seq }) == Some(2UL))
+  c.advance()
+  // The third entry repeats key "a": no entry, and a Corrupt error.
+  assert_true(c.peek() is None)
+  assert_true(c.error() is Some(_))
+  match c.error() {
+    Some(DbError::Corrupt(_)) => ()
+    _ => abort("expected Corrupt from a duplicate-key table")
+  }
+}
+
+test "sst cursor rejects out-of-order keys as corrupt" {
+  let b = SstBuilder::new()
+  b.add(entry(b"b", 2UL, Some(b"2")))
+  b.add(entry(b"a", 1UL, Some(b"1")))
+  let r = parse(b.finish())
+  let c = r.cursor()
+  assert_true(c.peek().map(fn(e) { e.seq }) == Some(2UL))
+  c.advance()
+  assert_true(c.peek() is None)
+  match c.error() {
+    Some(DbError::Corrupt(_)) => ()
+    _ => abort("expected Corrupt from an out-of-order table")
+  }
+}
+
 test "sstable v2 bloom has no false negatives" {
   let b = SstBuilder::new(block_size=64)
   // Keys must ascend: [0,0],[0,1],...,[0,249],[1,0],...

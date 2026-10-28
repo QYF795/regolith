@@ -44,6 +44,9 @@ pub(all) struct Db {
   l2_reader : Ref[Option[SstReader]]
   l1_bytes : Ref[Int]
   l2_bytes : Ref[Int]
+  snapshots : Ref[Array[Snapshot]]
+  next_snap_id : Ref[UInt64]
+  pending : Ref[Array[String]]
 }
 
 /// Opens a database over the given storage, recovering its state.
@@ -66,6 +69,9 @@ pub fn Db::open_with_options(storage : Storage, opts : Options) -> Db raise DbEr
     l2_reader: Ref(None),
     l1_bytes: Ref(0),
     l2_bytes: Ref(0),
+    snapshots: Ref([]),
+    next_snap_id: Ref(0UL),
+    pending: Ref([]),
   }
   db.recover()
   db
@@ -311,10 +317,10 @@ pub fn Db::compact(self : Db) -> Unit raise DbError {
     write(self.storage, name, bytes)
     let reader = parse(bytes)
     for n in old_names {
-      remove(self.storage, n)
+      self.release_file(n)
     }
     match old_l1 {
-      Some(n) => remove(self.storage, n)
+      Some(n) => self.release_file(n)
       None => ()
     }
     self.l0_names.val = []
@@ -381,14 +387,14 @@ pub fn Db::compact_l2(self : Db) -> Unit raise DbError {
     write(self.storage, name, bytes)
     let reader = parse(bytes)
     for n in old_names {
-      remove(self.storage, n)
+      self.release_file(n)
     }
     match old_l1 {
-      Some(n) => remove(self.storage, n)
+      Some(n) => self.release_file(n)
       None => ()
     }
     match old_l2 {
-      Some(n) => remove(self.storage, n)
+      Some(n) => self.release_file(n)
       None => ()
     }
     self.l0_names.val = []
@@ -406,14 +412,14 @@ pub fn Db::compact_l2(self : Db) -> Unit raise DbError {
     // the old files leaves the store empty, and recovery without a new L2
     // keeps any surviving old tables, whose tombstones read correctly.
     for n in old_names {
-      remove(self.storage, n)
+      self.release_file(n)
     }
     match old_l1 {
-      Some(n) => remove(self.storage, n)
+      Some(n) => self.release_file(n)
       None => ()
     }
     match old_l2 {
-      Some(n) => remove(self.storage, n)
+      Some(n) => self.release_file(n)
       None => ()
     }
     self.l0_names.val = []
@@ -439,6 +445,69 @@ fn Db::maybe_compact_l2(self : Db) -> Unit raise DbError {
   if l1 >= self.opts.l2_size_trigger && (l2 == 0 || l1 * self.opts.l2_size_ratio >= l2) {
     self.compact_l2()
   }
+}
+
+/// True if any live snapshot still pins `name`.
+fn Db::file_held(self : Db, name : String) -> Bool {
+  for snap in self.snapshots.val {
+    if snap.closed.val {
+      continue
+    }
+    for n in snap.l0_names {
+      if n == name {
+        return true
+      }
+    }
+    match snap.l1_name {
+      Some(n) => {
+        if n == name {
+          return true
+        }
+      }
+      None => ()
+    }
+    match snap.l2_name {
+      Some(n) => {
+        if n == name {
+          return true
+        }
+      }
+      None => ()
+    }
+  }
+  false
+}
+
+/// Removes a table file compaction no longer needs, unless a live snapshot
+/// still reads it — then it is deferred to the pending list and physically
+/// deleted when the last holder releases.
+fn Db::release_file(self : Db, name : String) -> Unit raise DbError {
+  if self.file_held(name) {
+    self.pending.val.push(name)
+  } else {
+    remove(self.storage, name)
+  }
+}
+
+/// Unregisters a closed snapshot and sweeps the pending list: files no
+/// snapshot holds any more are deleted now.
+pub fn Db::release_snapshot(self : Db, id : UInt64) -> Unit raise DbError {
+  let kept : Array[Snapshot] = []
+  for snap in self.snapshots.val {
+    if snap.id != id {
+      kept.push(snap)
+    }
+  }
+  self.snapshots.val = kept
+  let kept_pending : Array[String] = []
+  for p in self.pending.val {
+    if self.file_held(p) {
+      kept_pending.push(p)
+    } else {
+      remove(self.storage, p)
+    }
+  }
+  self.pending.val = kept_pending
 }
 
 /// Flushes any pending writes; safe to call any number of times.

@@ -497,12 +497,17 @@ pub fn SstReader::get(self : SstReader, key : Bytes) -> Option[Option[Bytes]] ra
 /// A lazy forward cursor over one table: entries are parsed on demand, one
 /// block at a time, so scanning a large file holds no extra materialized
 /// state. Parse failures are reported through `error` rather than raised.
+/// Every entry must be strictly greater than the previous one — a duplicate
+/// or out-of-order key is a form of corruption that CRC cannot see (e.g. a
+/// table written by a buggy old version), and it would otherwise be merged
+/// silently forward by compactions. The cursor rejects it with `Corrupt`.
 pub(all) struct SstCursor {
   reader : SstReader
   block_idx : Ref[Int]
   pos : Ref[Int]
   entries_left : Ref[Int]
   current : Ref[Option[Entry]]
+  last_key : Ref[Option[Bytes]]
   done : Ref[Bool]
   err : Ref[Option[DbError]]
 }
@@ -514,6 +519,7 @@ pub fn SstReader::cursor(self : SstReader) -> SstCursor {
     pos: Ref(0),
     entries_left: Ref(0),
     current: Ref(None),
+    last_key: Ref(None),
     done: Ref(false),
     err: Ref(None),
   }
@@ -572,6 +578,19 @@ fn SstCursor::load(self : SstCursor) -> Unit {
   }
   let key = self.reader.bytes[self.pos.val:self.pos.val + kl].to_owned()
   self.pos.val = self.pos.val + kl
+  // Strictly ascending keys: blocks may not repeat or regress (see the
+  // struct comment). A single comparison per entry; the index already
+  // guarantees block-level ordering, so one cursor-wide last key suffices.
+  match self.last_key.val {
+    Some(prev) => {
+      if prev.lexical_compare(key) >= 0 {
+        self.fail("sst: keys not strictly ascending")
+        return
+      }
+    }
+    None => ()
+  }
+  self.last_key.val = Some(key)
   let vl = match try_varint(self.reader.bytes, self.pos) {
     None => {
       self.fail("sst: bad entry value")

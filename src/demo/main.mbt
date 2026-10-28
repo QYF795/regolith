@@ -65,9 +65,29 @@ fn main {
       Some(err) => println("scan error: \{err_text(err)}")
       None => ()
     }
+    println("\n[snapshot] frozen view before deleting moon")
+    let snap = db.snapshot()
     println("\n[del] moon")
     db.delete(b"moon")
-    println("[get] moon -> \{show(db.get(b"moon"))}\n")
+    println("[get] moon -> \{show(db.get(b"moon"))}")
+    // The snapshot still sees the state as of snapshot time.
+    println("[snapshot get] moon -> \{show(snap.get(b"moon"))}\n")
+    println("[snapshot scan] all entries as of snapshot time:")
+    let sit = snap.scan()
+    while true {
+      match sit.next() {
+        None => break
+        Some(e) => match e.value {
+          None => ()
+          Some(v) => println("  \{view(e.key)} = \{view(v)}")
+        }
+      }
+    }
+    match sit.error() {
+      Some(err) => println("snapshot scan error: \{err_text(err)}")
+      None => ()
+    }
+    snap.close()
     println("[flush]")
     db.flush()
     let s = db.stats()
