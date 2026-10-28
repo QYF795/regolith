@@ -1,6 +1,6 @@
 name = "QYF795/regolith"
 
-version = "0.2.0"
+version = "0.2.1"
 
 description = "月壤：纯 MoonBit LSM-tree 嵌入式 KV 存储（WAL + 跳表 MemTable + SSTable + 合并压缩）。"
 
