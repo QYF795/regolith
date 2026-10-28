@@ -26,10 +26,12 @@ moon add QYF795/regolith   # 依赖方式使用（mooncakes.io 已发布）
 ```
 
 ```moonbit
-let db = @QYF795/regolith.Db::open("data")!
-db.put(b"key", b"value")
-inspect(db.get(b"key")!) // Some(Some(b"value"))
-db.flush()! // 落盘确认
+fn main raise {
+  let db = @QYF795/regolith.Db::open("data")
+  db.put(b"key", b"value")
+  println(db.get(b"key").to_string()) // Some(Some(b"value"))
+  db.flush() // 落盘确认
+}
 ```
 
 本地开发与自测：
@@ -58,17 +60,17 @@ moon run --target js src/cli -- stats
 ## API
 
 ```moonbit
-fn main {
-  let db = Db::open("demo-data")! // 默认选项
+fn main raise {
+  let db = Db::open("demo-data") // 默认选项
   db.put(b"key", b"value")
-  inspect(db.get(b"key")!) // Some(Some(b"value"))
+  println(db.get(b"key").to_string()) // Some(Some(b"value"))
   // 多键一次原子提交（全有或全无）
   db.write(WriteBatch::new().put(b"a", b"1").delete(b"key"))
-  db.flush()! // 主动落盘
+  db.flush() // 主动落盘
   // 快照：冻结当前状态；后续写入不影响快照上的读写
   let snap = db.snapshot()
   db.put(b"key", b"other")
-  inspect(snap.get(b"key")!) // 仍是 Some(Some(b"value"))
+  println(snap.get(b"key").to_string()) // 仍是 Some(Some(b"value"))
   snap.close() // 释放快照钉住的表文件
 }
 ```
