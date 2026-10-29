@@ -22,6 +22,7 @@ moon test --target js             # 首次运行自动解析依赖
 moon check                       # 静态检查（必须零警告）
 moon test                        # js + wasm-gc 双后端全量测试
 moon test --target native        # 有 C 编译器时
+moon bench --target js           # 性能基准（moon test 会跳过它们）
 python tools/sim_crash.py        # 独立的崩溃一致性模型模拟器（200 种子）
 ```
 
@@ -43,6 +44,8 @@ python tools/sim_crash.py        # 独立的崩溃一致性模型模拟器（200
   `docs/acceptance.md` 的对应验收项上补测试证明。
 - 推送前要求：`moon check` 零警告 + `moon test` 双后端全绿
   + `sim_crash.py` 全绿（若改动触及恢复路径）。
+- 改动触及热路径（put/get/scan/批写/压缩）时跑一次 `moon bench` 确认没有
+  数量级退化，数字对比 `docs/bench.md`；native 数字由 CI 的 bench 任务回归。
 
 ## 代码风格
 
