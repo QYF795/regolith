@@ -45,7 +45,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 3 | v1 格式向后兼容读取 | ✅ | `sstable v1 files still parse (no bloom, may_contain always true)` |
 | 4 | 磁盘格式规范文档（字节级） | ✅ | [docs/format.md](format.md) |
 | 5 | CLI：set/get/del/batch/scan/scan_prefix/scan_range/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 9 项；`moon run --target js src/cli` 端到端实测 |
-| 6 | demo 可执行包全流程演示 | ✅ | `moon run --target js src/demo` 端到端实测 |
+| 6 | demo 可执行包全流程演示（含损坏检测段：翻字节 → 引擎拒绝解析） | ✅ | `moon run --target js src/demo` 端到端实测（put/batch/scan_prefix/scan_range/快照/flush/压缩/损坏检测全段通过） |
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
 | 8 | CI：三后端测试 + 静态检查 + 基准回归 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py` + native `moon bench`） |
 | 9 | 无第三方依赖（仅 moonbitlang 官方 core / x） | ✅ | moon.mod 仅依赖 `moonbitlang/x` |

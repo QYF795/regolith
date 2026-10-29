@@ -1,6 +1,7 @@
 import {
   "QYF795/regolith",
   "moonbitlang/core/encoding/utf8",
+  "moonbitlang/x/fs",
 }
 
 pkgtype(kind: "executable")

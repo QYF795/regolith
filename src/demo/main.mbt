@@ -135,6 +135,51 @@ fn main {
 
     println("[close]")
     db.close()
+
+    println("\n[corruption] 损坏检测：把落盘的 L2 表翻一个字节")
+    // 找到 demo-data 下的 L2 表，读进内存做一次字节翻转（磁盘文件不动，
+    // demo 可重复运行），然后让引擎重新解析：双层 CRC 必须拒绝它，
+    // 绝不静默返回错数据。
+    let names = try {
+      @fs.read_dir("demo-data").to_owned()
+    } catch {
+      _ => []
+    }
+    let mut l2_name = ""
+    for n in names {
+      if n.has_prefix("L2_") {
+        l2_name = n
+      }
+    }
+    if l2_name == "" {
+      println("  (no L2 table found — skipping)")
+    } else {
+      let good = try {
+        @fs.read_file_to_bytes("demo-data/" + l2_name)
+      } catch {
+        _ => b""
+      }
+      if good.length() == 0 {
+        println("  (could not read \{l2_name} — skipping)")
+      } else {
+        let _ = @QYF795/regolith.parse(good)
+        println("  intact table    -> parses ok")
+        let mid = good.length() / 2
+        let bad = Bytes::makei(good.length(), fn(i) {
+          if i == mid {
+            (good[i].to_int() ^ 0xFF).to_byte()
+          } else {
+            good[i]
+          }
+        })
+        try {
+          let _ = @QYF795/regolith.parse(bad)
+          println("  NOT REJECTED — corruption slipped through!")
+        } catch {
+          e => println("  byte \{mid} flipped -> rejected: \{err_text(e)}")
+        }
+      }
+    }
     println("done — data persisted under demo-data/")
   } catch {
     e => println("demo failed: \{err_text(e)}")

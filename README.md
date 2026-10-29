@@ -102,6 +102,9 @@ tools/         开发工具（sim_crash.py：崩溃一致性全状态模拟器�
 docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.md) / [设计文档](docs/design.md)
 ```
 
+版本历史见 [CHANGELOG.md](https://github.com/QYF795/regolith/blob/main/CHANGELOG.md)
+（链接指向 GitHub 仓库，mooncakes 包页上同样可点）。
+
 ## 许可证
 
 [Apache-2.0](LICENSE)
