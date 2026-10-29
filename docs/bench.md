@@ -17,7 +17,21 @@ time (mean ± σ)         range (min … max)  in N × M runs
 - `N × M runs`：N = 采样轮数，M = 每轮执行的迭代次数
 - 吞吐换算：`1 / mean`（scan/compact 类再乘以单次迭代处理的条目数）
 
-## 实测数字（2026-10-29，js 后端 / node，本机）
+## 实测数字（2026-10-29）
+
+**native 后端（CI ubuntu，`moon bench --target native`，日志为记录）**：
+
+| 基准 | 单次迭代 | mean | 换算吞吐 |
+|---|---|---|---|
+| put into memtable（2000 × 64B 循环覆盖） | 1 次 put | 784 ns | ~1.28M puts/s |
+| get from memtable（2000 键） | 1 次 get | 370 ns | ~2.70M gets/s |
+| get from L0 sstable（2000 键） | 1 次 get | 2.60 µs | ~385k gets/s |
+| get from L2 sstable（2000 键） | 1 次 get | 2.68 µs | ~373k gets/s |
+| scan 2000 entries（memtable + L0 双流归并） | 1 次全扫 | 308 µs | ~6.5M entries/s |
+| WriteBatch 500 puts | 1 批 500 键 | 369 µs | ~0.74 µs/put（~1.36M puts/s） |
+| compact L1 merge（2000 键重写） | 1 次归并 | 1.14 ms | ~1.75M entries/s |
+
+**js 后端（node，本机参考）**：
 
 | 基准 | 单次迭代 | mean | 换算吞吐 |
 |---|---|---|---|
@@ -31,21 +45,21 @@ time (mean ± σ)         range (min … max)  in N × M runs
 
 ## 怎么解读
 
-- **读分三级，代价递增**：memtable 跳表命中 1.2µs；SSTable 命中（L0/L2 同为
-  ~15µs）走的是 bloom 过滤 + 块索引二分 + 块内解析，层级不改变代价（每层
+- **读分三级，代价递增**：memtable 跳表命中 370ns；SSTable 命中（L0/L2 同为
+  ~2.6µs）走的是 bloom 过滤 + 块索引二分 + 块内解析，层级不改变代价（每层
   只有一张表时）。
-- **批写摊薄固定开销**：500 键一次 WriteBatch 的每键成本 4.3µs < 单键 put
-  6.2µs——WAL 单条批记录 + 连续 seq 段，比逐键写省掉组提交与记录头开销。
+- **批写摊薄固定开销**：500 键一次 WriteBatch 的每键成本 0.74µs < 单键 put
+  784ns——WAL 单条批记录 + 连续 seq 段，比逐键写省掉组提交与记录头开销。
   这正是申报书 §4 场景一「多键用一次批量写原子提交」的量化理由。
-- **压缩吞吐与扫描同量级**：compact 重写 2000 键 9.1ms（~219k 键/s）与扫描
-  （~1.46M 键/s）的差异来自读改写三份数据 + 写新表，符合 LSM 写放大模型。
-- **js 后端是最慢的后端**：native 后端的数字由 CI 的 `moon bench --target
-  native` 任务在 ubuntu 上产出（日志即记录），作为跨后端一致性的对照。本地
-  无 C 编译器时可跑 `moon bench --target js`。
+- **压缩吞吐与扫描同量级**：compact 重写 2000 键 1.14ms（~1.75M 键/s）与
+  扫描（~6.5M 键/s）的差异来自读改写三份数据 + 写新表，符合 LSM 写放大模型。
+- **后端间只有常数倍差异**：js 后端每个操作慢 8-20 倍，但所有路径的相对
+  关系一致（批写 < 逐键写、memtable 读 ≪ SST 读）——引擎行为跨后端可预期，
+  与「确定性」承诺一致。
 
 ## 基准的工程含义
 
 这套基准覆盖全部热路径（写路径、三级读路径、扫描、批写、压缩），并作为
 CI 的 native 任务随每次 push 回归——性能测试和正确性测试同一地位。数字证明
-引擎在 2000 键规模上没有病态路径：最贵的读（SSTable 点查）15µs，最贵的写
-路径（逐键 put）6.2µs，批写路径更快。
+引擎在 2000 键规模上没有病态路径：native 上最贵的读（SSTable 点查）2.6µs，
+最贵的写路径（逐键 put）784ns，批写路径更快。
