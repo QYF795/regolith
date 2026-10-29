@@ -30,8 +30,18 @@ moon add QYF795/regolith   # 依赖方式使用（mooncakes.io 已发布）
 fn main raise {
   let db = @QYF795/regolith.Db::open("data")
   db.put(b"key", b"value")
-  println(db.get(b"key").to_string()) // Some(Some(b"value"))
+  println(show(db.get(b"key"))) // Some(Some(b"value"))
   db.flush() // 落盘确认
+}
+
+// Option[Option[Bytes]] 的三态渲染（core 0.10.15 起 Option 的 to_string
+// 已弃用，用 match 渲染即可）：
+fn show(r : Option[Option[Bytes]]) -> String {
+  match r {
+    None => "None"
+    Some(None) => "Some(None)"
+    Some(Some(v)) => "Some(Some(\{v.to_string()}))"
+  }
 }
 ```
 
@@ -65,22 +75,23 @@ git-ignore。
 
 ```moonbit
 fn main raise {
-  let db = Db::open("demo-data") // 默认选项
+  let db = @QYF795/regolith.Db::open("demo-data") // 默认选项
   db.put(b"key", b"value")
-  println(db.get(b"key").to_string()) // Some(Some(b"value"))
-  // 多键一次原子提交（全有或全无）
-  db.write(WriteBatch::new().put(b"a", b"1").delete(b"key"))
-  db.flush() // 主动落盘
+  println(show(db.get(b"key"))) // Some(Some(b"value"))
   // 快照：冻结当前状态；后续写入不影响快照上的读写
   let snap = db.snapshot()
-  db.put(b"key", b"other")
-  println(snap.get(b"key").to_string()) // 仍是 Some(Some(b"value"))
+  // 多键一次原子提交（全有或全无）
+  db.write(@QYF795/regolith.WriteBatch::new().put(b"a", b"1").delete(b"key"))
+  db.flush() // 主动落盘
+  println(show(snap.get(b"key"))) // 仍是 Some(Some(b"value"))（冻结视图）
+  println(show(db.get(b"key"))) // Some(None)（活库已推进）
   snap.close() // 释放快照钉住的表文件
 }
 ```
 
 `Db::get` 返回 `Option[Option[Bytes]]`：`None` = 键不存在，`Some(None)` =
-墓碑（已删除），`Some(Some(v))` = 值。
+墓碑（已删除），`Some(Some(v))` = 值。三态渲染用 `show`（定义见快速开始；
+core 0.10.15 起 `Option` 的 `to_string` 已弃用，直接调用会收到弃用警告）。
 
 ## 目录结构
 

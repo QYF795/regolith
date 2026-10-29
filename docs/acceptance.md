@@ -80,7 +80,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 5 | 迭代器句柄语义：持有快照迭代器期间活库任意写/flush/压缩，句柄稳定输出冻结视图；可暂停（停止 next）可恢复（重开迭代器或从上次键 scan_range） | ✅ | `snapshot iterator is a stable handle across writes flush and compact` |
 | 6 | close 幂等；快照为纯内存概念，不改变磁盘格式与恢复算法 | ✅ | `snapshot close is idempotent and reads survive close`；docs/format.md §1 注记 |
 | 7 | mooncakes.io 0.2.0（快照版）发布，消费方 `moon add` 后端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：快照冻结视图（活库推进后 snap 读不变、absent 键区分）、snapshot.scan_range、close、reopen 持久化全部符合预期 |
-| 8 | 0.3.0（CLI batch + 性能基准）发布，消费方 `moon add --upgrade` 端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：升级后 WriteBatch + batch 多键原子提交、demo 全流程端到端 |
+| 8 | 0.3.0/0.3.1（CLI batch + 性能基准）发布，消费方 `moon add --upgrade` 端到端验证 | ✅ | `moon publish` 200 OK ×2；消费方验证：升级后 WriteBatch 多键原子提交、快照冻结视图、压缩墓碑清除、reopen 持久化端到端；README 示例逐字编译运行（0.3.1 修正 core 弃用 `Option::to_string` 导致的消费方警告） |
 
 ## 复现步骤
 
