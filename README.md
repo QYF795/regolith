@@ -17,7 +17,8 @@
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
 - **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite（WAL / L0 / L1 / L2）
-- **三后端 CI**：js / wasm-gc / native 测试全绿，`moon check` 零警告
+- **性能基准**：`moon bench` 7 项基准覆盖写路径 / 三级读路径 / 扫描 / 批写 / 压缩，实测数字见 [docs/bench.md](docs/bench.md)
+- **三后端 CI**：js / wasm-gc / native 测试全绿 + native 基准回归，`moon check` 零警告
 
 ## 快速开始
 
@@ -46,16 +47,19 @@ moon test --target wasm-gc
 ```bash
 moon run --target js src/cli -- set hello regolith
 moon run --target js src/cli -- get hello          # regolith
+moon run --target js src/cli -- batch put a 1 put b 2 del c   # 多键一次原子提交
 moon run --target js src/cli -- scan
 moon run --target js src/cli -- scan_prefix hel    # hello=regolith
 moon run --target js src/cli -- scan_range h i     # hello=regolith
 moon run --target js src/cli -- stats
 ```
 
-命令：`set <key> <value>` / `get <key>` / `del <key>` / `scan` /
-`scan_prefix <prefix>` / `scan_range <start> <end>`（end 为空串 = 无上界）/
-`flush` / `compact`（归并全部数据到底层 L2）/ `stats`。`set`/`del` 返回
-`ok` 时数据已落盘。数据目录 `regolith-data/` 已 git-ignore。
+命令：`set <key> <value>` / `get <key>` / `del <key>` /
+`batch (put <key> <value> | del <key>)...`（多键一次原子提交，全有或全无）/
+`scan` / `scan_prefix <prefix>` / `scan_range <start> <end>`（end 为空串 =
+无上界）/ `flush` / `compact`（归并全部数据到底层 L2）/ `stats`。
+`set`/`del`/`batch` 返回 `ok` 时数据已落盘。数据目录 `regolith-data/` 已
+git-ignore。
 
 ## API
 

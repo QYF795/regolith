@@ -76,3 +76,25 @@ test "clicore scan_range" {
   assert_true(run(db, ["scan_range", "zz", "zzz"]) == "")
   assert_true(run(db, ["scan_range"]) == "error: usage: scan_range <start> <end>")
 }
+
+test "clicore batch applies atomically and durably" {
+  let db = @QYF795/regolith.Db::open_memory()
+  let _ = run(db, ["set", "c", "old"])
+  assert_true(run(db, ["batch", "put", "a", "1", "put", "b", "2", "del", "c"]) == "ok")
+  assert_true(run(db, ["get", "a"]) == "1")
+  assert_true(run(db, ["get", "b"]) == "2")
+  assert_true(run(db, ["get", "c"]) == "(deleted)")
+  // The batch is one durable unit: the earlier set and the batch each
+  // produced one L0 table, nothing more.
+  assert_true(run(db, ["stats"]).contains("l0: 2 tables"))
+}
+
+test "clicore batch last write wins and usage errors" {
+  let db = @QYF795/regolith.Db::open_memory()
+  assert_true(run(db, ["batch", "put", "a", "1", "put", "a", "2"]) == "ok")
+  assert_true(run(db, ["get", "a"]) == "2")
+  assert_true(run(db, ["batch"]) == "error: usage: batch (put <key> <value> | del <key>)...")
+  assert_true(run(db, ["batch", "put", "k"]) == "error: batch: put needs <key> <value>")
+  assert_true(run(db, ["batch", "del"]) == "error: batch: del needs <key>")
+  assert_true(run(db, ["batch", "foo", "k"]) == "error: batch: expected put or del, got foo")
+}

@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**80 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**82 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -44,11 +44,12 @@ C 编译器，由 CI 验证，见 §M2）。
 | 2 | 点查经 bloom 短路（整库级） | ✅ | `db get hits every key in bloom-filtered tables` |
 | 3 | v1 格式向后兼容读取 | ✅ | `sstable v1 files still parse (no bloom, may_contain always true)` |
 | 4 | 磁盘格式规范文档（字节级） | ✅ | [docs/format.md](format.md) |
-| 5 | CLI：set/get/del/scan/scan_prefix/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 6 项；`moon run --target js src/cli` 端到端实测 |
+| 5 | CLI：set/get/del/batch/scan/scan_prefix/scan_range/flush/compact/stats + 用法错误提示 | ✅ | clicore_test.mbt 9 项；`moon run --target js src/cli` 端到端实测 |
 | 6 | demo 可执行包全流程演示 | ✅ | `moon run --target js src/demo` 端到端实测 |
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
-| 8 | CI：三后端测试 + 静态检查 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py`） |
+| 8 | CI：三后端测试 + 静态检查 + 基准回归 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py` + native `moon bench`） |
 | 9 | 无第三方依赖（仅 moonbitlang 官方 core / x） | ✅ | moon.mod 仅依赖 `moonbitlang/x` |
+| 10 | 性能基准套件：写路径 + 三级读路径 + scan/批写/压缩 7 项基准，数字入文档 | ✅ | src/bench_test.mbt（`moon bench`）；实测数字见 [docs/bench.md](bench.md) |
 
 ## M3 — 查询与写入增强 + 分级压缩（11 月轮核心交付）
 
@@ -66,6 +67,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 10 | 存储格式与恢复算法文档同步三层 | ✅ | [docs/format.md](format.md) §1/§6/§7 |
 | 11 | mooncakes.io 发布（`moon add QYF795/regolith`） | ✅ | `moon publish` 200 OK；消费方验证：新建工程 `moon add` 后 open/put/WriteBatch/scan_range 端到端可用 |
 | 12 | 4 次 demo 式运行回归：L0→L1 压缩产出严格升序、无重复键（含快照参与的第 4 次 flush） | ✅ | `four demo-style runs compact to a unique ascending L1`、`snapshot before the fourth flush does not disturb compaction` |
+| 13 | CLI `batch` 命令：`batch (put <k> <v> \| del <k>)...` 一次提交多键、原子且持久（申报书 §4 场景一 CLI 面） | ✅ | `clicore batch applies atomically and durably`、`clicore batch last write wins and usage errors`；`moon run --target js src/cli` 端到端实测（含两种用法错误路径） |
 
 ## M4 — 结项（快照与迭代器句柄）
 
@@ -78,6 +80,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 5 | 迭代器句柄语义：持有快照迭代器期间活库任意写/flush/压缩，句柄稳定输出冻结视图；可暂停（停止 next）可恢复（重开迭代器或从上次键 scan_range） | ✅ | `snapshot iterator is a stable handle across writes flush and compact` |
 | 6 | close 幂等；快照为纯内存概念，不改变磁盘格式与恢复算法 | ✅ | `snapshot close is idempotent and reads survive close`；docs/format.md §1 注记 |
 | 7 | mooncakes.io 0.2.0（快照版）发布，消费方 `moon add` 后端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：快照冻结视图（活库推进后 snap 读不变、absent 键区分）、snapshot.scan_range、close、reopen 持久化全部符合预期 |
+| 8 | 0.3.0（CLI batch + 性能基准）发布，消费方 `moon add --upgrade` 端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：升级后 WriteBatch + batch 多键原子提交、demo 全流程端到端 |
 
 ## 复现步骤
 
@@ -87,5 +90,6 @@ cd regolith
 moon test                       # 本机可跑的后端（js + wasm-gc）
 moon test --target native       # 需要本机 C 编译器；无则看 CI
 python tools/sim_crash.py       # 独立模型模拟器（200 种子）
+moon bench --target js          # 性能基准（数字见 docs/bench.md）
 moon run --target js src/demo   # 端到端演示
 ```

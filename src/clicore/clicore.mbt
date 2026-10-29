@@ -66,6 +66,48 @@ pub fn run(db : @QYF795/regolith.Db, argv : Array[String]) -> String raise @QYF7
         "ok"
       }
     }
+    "batch" => {
+      // Atomic multi-key write: any number of put/del pairs in one commit —
+      // one WAL record, all-or-nothing on recovery, last write wins inside
+      // the batch. Example: batch put a 1 del b put c 3
+      if argv.length() < 2 {
+        "error: usage: batch (put <key> <value> | del <key>)..."
+      } else {
+        let mut wb = @QYF795/regolith.WriteBatch::new()
+        let mut i = 1
+        let mut err = ""
+        while i < argv.length() && err == "" {
+          match argv[i] {
+            "put" => {
+              if i + 2 >= argv.length() {
+                err = "error: batch: put needs <key> <value>"
+              } else {
+                wb = wb.put(@utf8.encode(argv[i + 1]), @utf8.encode(argv[i + 2]))
+                i = i + 3
+              }
+            }
+            "del" => {
+              if i + 1 >= argv.length() {
+                err = "error: batch: del needs <key>"
+              } else {
+                wb = wb.delete(@utf8.encode(argv[i + 1]))
+                i = i + 2
+              }
+            }
+            other => err = "error: batch: expected put or del, got \{other}"
+          }
+        }
+        if err == "" {
+          db.write(wb)
+          // Same durability guarantee as set/del: the whole batch is durable
+          // before the process exits.
+          db.flush()
+          "ok"
+        } else {
+          err
+        }
+      }
+    }
     "scan" => {
       let mut out = ""
       let it = db.scan()
@@ -148,7 +190,7 @@ pub fn run(db : @QYF795/regolith.Db, argv : Array[String]) -> String raise @QYF7
       "memtable: \{s.memtable_bytes} bytes\nwal: \{s.wal_bytes} bytes\nl0: \{s.l0_files} tables\nl1: \{s.l1_files} tables\nl2: \{s.l2_files} tables"
     }
     "help" =>
-      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  scan_range <a> <b> list entries with a <= key < b (empty b = unbounded)\n  flush              flush the memtable to L0\n  compact            merge everything into L2\n  stats              storage statistics\n  help               this help"
+      "commands:\n  set <key> <value>  write a key\n  get <key>          read a key\n  del <key>          delete a key\n  batch ...          atomic multi-key write: (put <key> <value> | del <key>)...\n  scan               list all live entries\n  scan_prefix <p>    list entries whose key starts with p\n  scan_range <a> <b> list entries with a <= key < b (empty b = unbounded)\n  flush              flush the memtable to L0\n  compact            merge everything into L2\n  stats              storage statistics\n  help               this help"
     _ => "error: unknown command \{argv[0]} (try \"help\")"
   }
 }
