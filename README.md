@@ -10,10 +10,11 @@
 
 ## 特性
 
-- **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 分级合并压缩（L0 → L1 → L2）
+- **LSM-tree 架构**：跳表 MemTable + WAL + SSTable + 多文件分级压缩（L0 → L1 → L2：compact 合并全部 L0 + 区间重叠 L1，compact_l2 挑最旧 L1 + 区间重叠 L1/L2，输出超 2 MiB 按键序拆分，L1/L2 键区间两两不相交）
 - **原子批量写**：`Db::write(WriteBatch)` 一次提交多键，WAL 单条记录承载，恢复时整批全有或全无
 - **快照与迭代器句柄**：`Db::snapshot()` 冻结一致性视图，活库继续写/flush/压缩期间，快照上的读与迭代器保持同一视图，可暂停可恢复
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
+- **持久性契约诚实化**：flush 返回 = 字节已 write 到 OS 且回读校验（进程级崩溃安全）；掉电级需 fsync，受 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341) 阻塞，与 LevelDB `WriteOptions{sync=false}` 同款语义，详见 [docs/durability.md](docs/durability.md)
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
 - **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite（WAL / L0 / L1 / L2）
@@ -32,7 +33,7 @@ fn main raise {
   let db = @QYF795/regolith.Db::open("data")
   db.put(b"key", b"value")
   println(show(db.get(b"key"))) // Some(Some(b"value"))
-  db.flush() // 落盘确认
+  db.flush() // 持久化确认（进程级；掉电级见 docs/durability.md）
 }
 
 // Option[Option[Bytes]] 的三态渲染（core 0.10.15 起 Option 的 to_string
@@ -69,7 +70,9 @@ moon run --target js src/cli -- stats
 `batch (put <key> <value> | del <key>)...`（多键一次原子提交，全有或全无）/
 `scan` / `scan_prefix <prefix>` / `scan_range <start> <end>`（end 为空串 =
 无上界）/ `flush` / `compact`（归并全部数据到底层 L2）/ `stats`。
-`set`/`del`/`batch` 返回 `ok` 时数据已落盘。数据目录 `regolith-data/` 已
+`set`/`del`/`batch` 返回 `ok` 时写入已进 memtable 与 WAL 缓冲；`flush`
+返回即已 write 到 OS 并经回读校验（进程级崩溃安全，掉电级保证见
+[docs/durability.md](docs/durability.md)）。数据目录 `regolith-data/` 已
 git-ignore。
 
 ## API
@@ -99,7 +102,7 @@ core 0.10.15 起 `Option` 的 `to_string` 已弃用，直接调用会收到弃�
 ```
 src/           引擎实现（WAL / MemTable / SSTable / Db / 合并迭代器 / CLI / demo）
 tools/         开发工具（sim_crash.py：崩溃一致性全状态模拟器）
-docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.md) / [设计文档](docs/design.md)
+docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.md) / [设计文档](docs/design.md) / [持久性契约](docs/durability.md)
 ```
 
 版本历史见 [CHANGELOG.md](https://github.com/QYF795/regolith/blob/main/CHANGELOG.md)
