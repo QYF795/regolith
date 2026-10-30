@@ -13,9 +13,10 @@ Recovery mirrors the engine exactly: L2 union-coverage drop, L1 keep-all
 (legacy full-merge rules for G-less names), L0 covered by L1 union or legacy
 L2, full WAL replay (no skipping), next_seq over every surviving seq.
 
-Dev tool, not part of the library: run `python -I tools/sim_crash.py` (single
-seed) or loop over seeds to validate the crash-consistency design against the
-spec independently of the MoonBit code. All 200 seeds pass.
+Dev tool, not part of the library: run `python -I tools/sim_crash.py` to
+validate the crash-consistency design against the spec independently of the
+MoonBit code — 200 seeds by default, or pass a count
+(`python -I tools/sim_crash.py 50`). All 200 seeds pass.
 
 Diagnosed with it: the only real engine bug found by the crash suite was a
 skip-list orphan node in MemTable::put (fixed); the flush/compact/recover
@@ -537,4 +538,8 @@ def prefix_check(ops, db):
 
 
 if __name__ == '__main__':
-    run_case(1)
+    import sys
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+    for s in range(1, n + 1):
+        run_case(s, trace=False)
+    print(f"all {n} seeds pass")

@@ -2,7 +2,7 @@
 //
 // Large-scale soak: 50,000 deterministic random operations (60% put / 15%
 // delete / 25% get) over an in-memory database, cross-checked against a
-// simple model, with periodic flushes, L1 compactions and full
+// simple model, with periodic flushes, L1/L2 compactions and full
 // close/reopen cycles. The crash suite proves crash consistency; this
 // suite proves sustained mixed workloads converge — every get matches the
 // model, every reopen rebuilds the same state, tombstones stay suppressed.
@@ -66,7 +66,7 @@ fn check_scan(db : Db, keys : FixedArray[Bytes], model : FixedArray[Option[Bytes
   }
 }
 
-test "soak 50000 random ops against model with flush compact reopen" {
+test "soak 50000 random ops against model with flush compact compact_l2 reopen" {
   let keys : FixedArray[Bytes] = FixedArray::makei(SOAK_KEYS, fn(i) { soak_key(i) })
   let model : FixedArray[Option[Bytes]] = FixedArray::make(SOAK_KEYS, None)
   let storage = MemoryStorage::new()
@@ -95,6 +95,12 @@ test "soak 50000 random ops against model with flush compact reopen" {
     }
     if op % 5_000 == 4_999 {
       db.compact()
+    }
+    if op % 10_000 == 4_999 {
+      // L1 → L2 selective bottom merge (tombstones suppressed): runs right
+      // after the L0 → L1 compaction on the same tick, so the reopen five
+      // thousand ops later must rebuild state from L2 tables alone.
+      db.compact_l2()
     }
     if op % 10_000 == 9_999 {
       // Full close/reopen: recovery must rebuild the exact same state from

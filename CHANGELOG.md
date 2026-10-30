@@ -4,6 +4,17 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 验证
+
+- soak 5 万操作模型对照新增周期 `compact_l2` 调用：多文件选择性
+  L2 归并（抑墓碑）进入持续混合负载验证，每次 L2 归并后的
+  close/reopen 需从 L2 表重建状态
+- `tools/sim_crash.py` 默认跑满 200 种子（可选参数
+  `python -I tools/sim_crash.py N`），与 CI 注释「same 200-seed
+  scenario family」一致（此前默认只跑单种子）
+
 ## [0.4.1] - 2026-10-30
 
 ### 修复
