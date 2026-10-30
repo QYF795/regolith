@@ -181,8 +181,13 @@ pub fn run(db : @QYF795/regolith.Db, argv : Array[String]) -> String raise @QYF7
       "ok"
     }
     "compact" => {
+      // Seal the memtable first so the merges see all committed writes,
+      // then drain L0 into L1 and every L1 table into L2.
+      db.flush()
       db.compact()
-      db.compact_l2()
+      while db.stats().l1_files > 0 {
+        db.compact_l2()
+      }
       "ok"
     }
     "stats" => {

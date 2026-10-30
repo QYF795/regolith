@@ -102,16 +102,15 @@ test "compaction defers files held by snapshots until close" {
   db.flush()
   assert_true(db.stats().l1_files == 1)
   let snap = db.snapshot()
-  let held = match snap.l1_name {
-    Some(n) => n
-    None => abort("snapshot expected an L1 table")
-  }
+  assert_true(snap.l1_names.length() == 1, msg="snapshot expected one L1 table")
+  let held = snap.l1_names[0]
   assert_true(list(db.storage, "").contains(held))
-  // Two more flushes trigger an L1 compaction: the old L1 is merged away
-  // but stays on storage because the snapshot pins it.
-  db.put(b"c", b"3")
+  // Two more flushes (rewriting the same keys) trigger an L1 compaction:
+  // the old L1 is merged away but stays on storage because the snapshot
+  // pins it.
+  db.put(b"a", b"3")
   db.flush()
-  db.put(b"d", b"4")
+  db.put(b"b", b"4")
   db.flush()
   assert_true(list(db.storage, "").contains(held))
   assert_true(snap.get(b"a") == Some(Some(b"1")))
@@ -131,13 +130,11 @@ test "multiple snapshots release independently" {
   db.flush()
   let snap1 = db.snapshot()
   let snap2 = db.snapshot()
-  let held = match snap1.l1_name {
-    Some(n) => n
-    None => abort("snapshot expected an L1 table")
-  }
-  db.put(b"c", b"3")
+  assert_true(snap1.l1_names.length() == 1, msg="snapshot expected one L1 table")
+  let held = snap1.l1_names[0]
+  db.put(b"a", b"3")
   db.flush()
-  db.put(b"d", b"4")
+  db.put(b"b", b"4")
   db.flush()
   assert_true(list(db.storage, "").contains(held))
   snap1.close()

@@ -32,10 +32,10 @@ pub(all) struct Snapshot {
   mem : MemTable
   l0_names : Array[String]
   l0_readers : Array[SstReader]
-  l1_name : Option[String]
-  l1_reader : Option[SstReader]
-  l2_name : Option[String]
-  l2_reader : Option[SstReader]
+  l1_names : Array[String]
+  l1_readers : Array[SstReader]
+  l2_names : Array[String]
+  l2_readers : Array[SstReader]
   closed : Ref[Bool]
 }
 
@@ -64,16 +64,28 @@ pub fn Db::snapshot(self : Db) -> Snapshot {
   for r in self.l0_readers.val {
     l0_readers.push(r)
   }
+  let l1_names : Array[String] = []
+  let l1_readers : Array[SstReader] = []
+  for t in self.l1_tables.val {
+    l1_names.push(t.name)
+    l1_readers.push(t.reader)
+  }
+  let l2_names : Array[String] = []
+  let l2_readers : Array[SstReader] = []
+  for t in self.l2_tables.val {
+    l2_names.push(t.name)
+    l2_readers.push(t.reader)
+  }
   let snap : Snapshot = {
     db: self,
     id: id,
     mem: mem,
     l0_names: l0_names,
     l0_readers: l0_readers,
-    l1_name: self.l1_name.val,
-    l1_reader: self.l1_reader.val,
-    l2_name: self.l2_name.val,
-    l2_reader: self.l2_reader.val,
+    l1_names: l1_names,
+    l1_readers: l1_readers,
+    l2_names: l2_names,
+    l2_readers: l2_readers,
     closed: Ref(false),
   }
   self.snapshots.val.push(snap)
@@ -97,27 +109,23 @@ pub fn Snapshot::get(self : Snapshot, key : Bytes) -> Option[Option[Bytes]] rais
       }
     }
   }
-  match self.l1_reader {
-    Some(r) => {
-      if r.may_contain(key) {
-        match r.get(key) {
-          Some(v) => return Some(v)
-          None => ()
-        }
+  for r in self.l1_readers {
+    if r.may_contain(key) {
+      match r.get(key) {
+        Some(v) => return Some(v)
+        None => ()
       }
     }
-    None => ()
   }
-  match self.l2_reader {
-    Some(r) => {
-      if r.may_contain(key) {
-        r.get(key)
-      } else {
-        None
+  for r in self.l2_readers {
+    if r.may_contain(key) {
+      match r.get(key) {
+        Some(v) => return Some(v)
+        None => ()
       }
     }
-    None => None
   }
+  None
 }
 
 /// Iterates the frozen view in ascending key order. The iterator stays
@@ -128,13 +136,11 @@ pub fn Snapshot::scan(self : Snapshot) -> MergeIterator {
   for r in self.l0_readers {
     streams.push(Stream::Sst(r.cursor()))
   }
-  match self.l1_reader {
-    Some(r) => streams.push(Stream::Sst(r.cursor()))
-    None => ()
+  for r in self.l1_readers {
+    streams.push(Stream::Sst(r.cursor()))
   }
-  match self.l2_reader {
-    Some(r) => streams.push(Stream::Sst(r.cursor()))
-    None => ()
+  for r in self.l2_readers {
+    streams.push(Stream::Sst(r.cursor()))
   }
   MergeIterator::new(streams)
 }

@@ -176,6 +176,12 @@ pub fn SstBuilder::add(self : SstBuilder, entry : Entry) -> Unit {
   }
 }
 
+/// Byte size of everything written so far (blocks + index buffers). Used to
+/// split a large merge into several tables of bounded size.
+pub fn SstBuilder::approx_size(self : SstBuilder) -> Int {
+  self.data.length() + self.block.length() + self.index.length()
+}
+
 /// Finishes the table and returns the serialized bytes (v2, with bloom).
 pub fn SstBuilder::finish(self : SstBuilder) -> Bytes {
   self.seal_block()
@@ -411,6 +417,42 @@ fn parse_v2(bytes : Bytes) -> SstReader raise DbError {
     index_offsets: offs,
     bloom: bloom,
   }
+}
+
+/// The smallest key in the table: the first entry of the first block. The
+/// index only stores per-block *last* keys, so the first key is read from
+/// the data. A table that fails this parse is corrupt.
+pub fn SstReader::first_key(self : SstReader) -> Bytes raise DbError {
+  let pos = Ref(0)
+  let n = match try_varint(self.bytes, pos) {
+    None => raise DbError::Corrupt("sst: bad block header")
+    Some(v) => v.to_int()
+  }
+  if n < 1 {
+    raise DbError::Corrupt("sst: empty first block")
+  }
+  // entry := tomb(varint) seq(varint) kl(varint) key vl(varint) value
+  match try_varint(self.bytes, pos) {
+    None => raise DbError::Corrupt("sst: bad entry")
+    Some(_) => ()
+  }
+  match try_varint(self.bytes, pos) {
+    None => raise DbError::Corrupt("sst: bad entry seq")
+    Some(_) => ()
+  }
+  let kl = match try_varint(self.bytes, pos) {
+    None => raise DbError::Corrupt("sst: bad entry key")
+    Some(v) => v.to_int()
+  }
+  if kl <= 0 || pos.val + kl > self.bytes.length() {
+    raise DbError::Corrupt("sst: entry key out of range")
+  }
+  self.bytes[pos.val:pos.val + kl].to_owned()
+}
+
+/// The largest key in the table: the index stores each block's last key.
+pub fn SstReader::max_key(self : SstReader) -> Bytes {
+  self.index_keys[self.index_keys.length() - 1]
 }
 
 /// The bloom filter says the key is absent, or the table has no filter (v1).

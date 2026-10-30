@@ -161,7 +161,7 @@ test "db recovery drops stale l0 covered by l1" {
   assert_true(db2.get(b"b") == Some(Some(b"2")))
 }
 
-test "db recovery drops stale l1" {
+test "db recovery keeps stale l1 tables and sweeps them on compaction" {
   let ms = MemoryStorage::new()
   let db = Db::open_with_options(Storage::Memory(ms), Options::default())
   db.put(b"a", b"1")
@@ -174,11 +174,26 @@ test "db recovery drops stale l1" {
   new_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
   write(Storage::Memory(ms), "L1_2.sst", new_b.finish())
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
-  assert_true(db2.stats().l1_files == 1)
+  // Multi-file L1 is keep-all: an L1 merge does not swallow every
+  // overlapping L1, so coverage inference is unsound for L1 — both tables
+  // survive recovery and reads hit the newest one first.
+  assert_true(db2.stats().l1_files == 2)
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  // The next bottom compaction touches the stale table's range and sweeps
+  // it: the oldest L1 plus every L1 overlapping it go into L2.
+  db2.compact_l2()
+  assert_true(db2.stats().l1_files == 0)
+  assert_true(db2.stats().l2_files == 1)
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
   assert_true(db2.get(b"b") == Some(Some(b"2")))
 }
 
-test "db recovery skips stale wal records covered by l1" {
+test "db recovery replays the full wal without skipping" {
+  // A crash after the WAL seal but before it was cleared leaves the sealed
+  // batch on disk next to the tables built from it. Recovery replays every
+  // record — a global coverage watermark is unsound with selective merges —
+  // and the replayed memtable agrees with the tables.
   let ms = MemoryStorage::new()
   let db = Db::open_with_options(Storage::Memory(ms), Options::default())
   db.put(b"a", b"1")
@@ -188,12 +203,17 @@ test "db recovery skips stale wal records covered by l1" {
   builder.add({ key: b"a", seq: 1UL, value: Some(b"1") })
   builder.add({ key: b"b", seq: 2UL, value: Some(b"2") })
   write(Storage::Memory(ms), "L1_2.sst", builder.finish())
-  // A stale WAL holding seq 1 for key "a" must not override the table.
+  // The sealed-but-not-cleared WAL holds the same writes.
   let stale = Wal::new()
-  stale.append(b"a", Some(b"stale"), 1UL)
+  stale.append(b"a", Some(b"1"), 1UL)
+  stale.append(b"b", Some(b"2"), 2UL)
   write(Storage::Memory(ms), "WAL", stale.encode())
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
   assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  // The sequence continues after the replayed records.
+  db2.put(b"c", b"3")
+  assert_true(db2.get(b"c") == Some(Some(b"3")))
 }
 
 test "db seq continues after reopen" {
@@ -474,12 +494,14 @@ test "db l2 compaction merges l1 into l2" {
   assert_true(st.l2_files == 1)
   assert_true(st.l1_files == 0)
   assert_true(st.l0_files == 0)
-  // More writes pile up through L1 and into L2 again.
+  // More writes pile up through L1 and into L2 again: the second merge is
+  // selective (the new L1 does not overlap the existing L2), so the bottom
+  // level now holds two tables with disjoint ranges.
   db.put(b"c", b"3")
   db.flush()
   db.put(b"d", b"4")
   db.flush()
-  assert_true(db.stats().l2_files == 1)
+  assert_true(db.stats().l2_files == 2)
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
   assert_true(db2.get(b"a") == Some(Some(b"1")))
   assert_true(db2.get(b"b") == Some(Some(b"2")))
@@ -508,15 +530,15 @@ test "db l1 tombstone covers l2 until bottom compaction" {
   assert_true(db2.get(b"a") is None)
 }
 
-test "db recovery drops tables and wal covered by l2" {
+test "db recovery drops legacy tables covered by l2 and replays the wal" {
   let ms = MemoryStorage::new()
   let db = Db::open_with_options(Storage::Memory(ms), Options::default())
   db.put(b"a", b"1")
   db.put(b"b", b"2")
   db.flush() // L0_000000: a@1, b@2
-  // Simulate a bottom compaction that landed L2_5.sst (covering every seq
-  // <= 5: L0 a/b and an L1_3) but crashed before deleting the inputs, plus
-  // a newer L0 that outlives the watermark.
+  // Simulate an old-format bottom compaction that landed L2_5.sst (covering
+  // every seq <= 5: L0 a/b and an L1_3) but crashed before deleting the
+  // inputs, plus a newer L0 that outlives the watermark.
   let l1_b = SstBuilder::new()
   l1_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
   l1_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
@@ -532,14 +554,15 @@ test "db recovery drops tables and wal covered by l2" {
   let l0_b = SstBuilder::new()
   l0_b.add({ key: b"f", seq: 6UL, value: Some(b"6") })
   write(Storage::Memory(ms), "L0_000001.sst", l0_b.finish())
-  // A stale WAL (seq <= 5) plus a fresh record beyond the watermark.
+  // The WAL sealed right before the crash: the same a@1 the tables hold,
+  // plus a fresh record beyond the watermark.
   let wal = Wal::new()
-  wal.append(b"a", Some(b"stale"), 1UL)
+  wal.append(b"a", Some(b"1"), 1UL)
   wal.append(b"g", Some(b"7"), 7UL)
   write(Storage::Memory(ms), "WAL", wal.encode())
   let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
   assert_true(db2.stats().l2_files == 1)
-  assert_true(db2.stats().l1_files == 0) // L1_3 covered by L2_5
+  assert_true(db2.stats().l1_files == 0) // legacy L1_3 covered by legacy L2_5
   assert_true(db2.stats().l0_files == 1) // L0_000001 (f@6) survives
   assert_true(db2.get(b"a") == Some(Some(b"1")))
   assert_true(db2.get(b"e") == Some(Some(b"5")))
@@ -648,13 +671,10 @@ test "four demo-style runs compact to a unique ascending L1" {
       let _ = check_unique_ascending(r, "L0")
     }
   }
-  match db.l1_reader.val {
-    Some(r) => {
-      let es = check_unique_ascending(r, "L1")
-      assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
-    }
-    None => abort("expected an L1 table after four flushes")
-  }
+  let l1 = db.l1_tables.val
+  assert_true(l1.length() == 1, msg="expected one L1 table, got \{l1.length()}")
+  let es = check_unique_ascending(l1[0].reader, "L1")
+  assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
 }
 
 test "snapshot before the fourth flush does not disturb compaction" {
@@ -676,11 +696,217 @@ test "snapshot before the fourth flush does not disturb compaction" {
     }
     db.flush()
   }
-  match db.l1_reader.val {
-    Some(r) => {
-      let es = check_unique_ascending(r, "L1")
-      assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
-    }
-    None => abort("expected an L1 table after four flushes")
+  let l1 = db.l1_tables.val
+  assert_true(l1.length() == 1, msg="expected one L1 table, got \{l1.length()}")
+  let es = check_unique_ascending(l1[0].reader, "L1")
+  assert_true(es.length() == 3, msg="L1 has \{es.length()} entries, want 3")
+}
+
+// ---- v0.4 multi-file regressions (docs/design-multifile.md §四) ----
+
+test "repeated compaction without new writes is a no-op (memory)" {
+  // The rejection scenario: re-running compact/compact_l2 with no new
+  // writes must not touch any file (the old design reused the output name
+  // and then deleted its own only copy).
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_compaction_trigger(2).with_l2_size_trigger(20)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.compact()
+  db.compact_l2()
+  let before = list(Storage::Memory(ms), "")
+  db.compact()
+  db.compact_l2()
+  let after = list(Storage::Memory(ms), "")
+  assert_true(before.length() == after.length(), msg="file list changed: \{before.length()} -> \{after.length()}")
+  for n in before {
+    assert_true(after.contains(n), msg="lost file \{n}")
   }
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+}
+
+test "repeated compaction without new writes is a no-op (file)" {
+  let dir = "regolith-test-nonoop"
+  let s = Storage::File(FileStorage::new(dir))
+  let opts = Options::default().with_compaction_trigger(2).with_l2_size_trigger(20)
+  let db = Db::open_with_options(s, opts)
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.compact()
+  db.compact_l2()
+  let before = list(s, "")
+  db.compact()
+  db.compact_l2()
+  let after = list(s, "")
+  assert_true(before.length() == after.length(), msg="file list changed: \{before.length()} -> \{after.length()}")
+  for n in before {
+    assert_true(after.contains(n), msg="lost file \{n}")
+  }
+  let db2 = Db::open_with_options(s, Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+}
+
+test "table size limit splits compaction output into disjoint tables" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default()
+    .with_compaction_trigger(2)
+    .with_table_size_limit(200)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  for i = 0; i < 10; i = i + 1 {
+    let k = Bytes::from_array([i.to_byte()])
+    let v = Bytes::make(20, i.to_byte())
+    db.put(k, v)
+  }
+  db.flush()
+  for i = 10; i < 20; i = i + 1 {
+    let k = Bytes::from_array([i.to_byte()])
+    let v = Bytes::make(20, i.to_byte())
+    db.put(k, v)
+  }
+  db.flush() // trigger 2: the 20-entry merge far exceeds 200 bytes per table
+  let st = db.stats()
+  assert_true(st.l0_files == 0)
+  assert_true(st.l1_files >= 2, msg="expected a split merge, got \{st.l1_files} L1 table(s)")
+  // The pieces have pairwise disjoint ranges.
+  let tables = db.l1_tables.val
+  for i = 0; i < tables.length(); i = i + 1 {
+    for j = i + 1; j < tables.length(); j = j + 1 {
+      assert_true(
+        tables[i].max_key.lexical_compare(tables[j].min_key) < 0 ||
+          tables[j].max_key.lexical_compare(tables[i].min_key) < 0,
+        msg="pieces \{i} and \{j} overlap",
+      )
+    }
+  }
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  for i = 0; i < 20; i = i + 1 {
+    let k = Bytes::from_array([i.to_byte()])
+    assert_true(db2.get(k) == Some(Some(Bytes::make(20, i.to_byte()))), msg="key \{i} lost after reopen")
+  }
+}
+
+test "l2 compaction is selective: only the picked l1 group merges" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_compaction_trigger(2)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.flush()
+  db.put(b"b", b"2")
+  db.flush() // compact -> L1 [a,b]
+  db.put(b"m", b"3")
+  db.flush()
+  db.put(b"n", b"4")
+  db.flush() // compact -> second, disjoint L1 [m,n]
+  assert_true(db.stats().l1_files == 2)
+  db.compact_l2() // picks the oldest L1; the disjoint one stays put
+  assert_true(db.stats().l2_files == 1)
+  assert_true(db.stats().l1_files == 1)
+  assert_true(db.get(b"a") == Some(Some(b"1")))
+  assert_true(db.get(b"b") == Some(Some(b"2")))
+  assert_true(db.get(b"m") == Some(Some(b"3")))
+  assert_true(db.get(b"n") == Some(Some(b"4")))
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"2")))
+  assert_true(db2.get(b"m") == Some(Some(b"3")))
+  assert_true(db2.get(b"n") == Some(Some(b"4")))
+}
+
+test "db recovery drops l2 covered by a union of split outputs" {
+  let ms = MemoryStorage::new()
+  // The old L2 [a,b] plus the two split pieces of the newer bottom merge
+  // that crashed before deleting its input: no single piece contains the
+  // old range, but the key-space union covers every key of the old table.
+  let old_b = SstBuilder::new()
+  old_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
+  old_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
+  write(Storage::Memory(ms), "L2_2.sst", old_b.finish())
+  let p1 = SstBuilder::new()
+  p1.add({ key: b"a", seq: 3UL, value: Some(b"3") })
+  write(Storage::Memory(ms), "L2_4_1.sst", p1.finish())
+  let p2 = SstBuilder::new()
+  p2.add({ key: b"b", seq: 4UL, value: Some(b"4") })
+  write(Storage::Memory(ms), "L2_4_2.sst", p2.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db.stats().l2_files == 2)
+  assert_true(db.get(b"a") == Some(Some(b"3")))
+  assert_true(db.get(b"b") == Some(Some(b"4")))
+}
+
+test "db recovery keeps l2 when split outputs leave a key uncovered" {
+  let ms = MemoryStorage::new()
+  // Same shape as above but the pieces leave the middle key uncovered:
+  // the old table must survive (coverage inference stays conservative).
+  let old_b = SstBuilder::new()
+  old_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
+  old_b.add({ key: b"b", seq: 2UL, value: Some(b"2") })
+  old_b.add({ key: b"c", seq: 3UL, value: Some(b"3") })
+  write(Storage::Memory(ms), "L2_3.sst", old_b.finish())
+  let p1 = SstBuilder::new()
+  p1.add({ key: b"a", seq: 5UL, value: Some(b"5") })
+  write(Storage::Memory(ms), "L2_5_1.sst", p1.finish())
+  let p2 = SstBuilder::new()
+  p2.add({ key: b"c", seq: 5UL, value: Some(b"5") })
+  write(Storage::Memory(ms), "L2_5_2.sst", p2.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db.stats().l2_files == 3)
+  assert_true(db.get(b"a") == Some(Some(b"5")))
+  assert_true(db.get(b"b") == Some(Some(b"2")))
+  assert_true(db.get(b"c") == Some(Some(b"5")))
+}
+
+test "db recovery drops l0 covered by a union of l1 pieces" {
+  let ms = MemoryStorage::new()
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  db.put(b"a", b"v1")
+  db.put(b"c", b"v2")
+  db.flush() // L0_000000: a@1, c@2
+  db.put(b"b", b"v3")
+  db.flush() // L0_000001: b@3
+  // The split pieces of the compaction that consumed both L0 tables,
+  // crashed before deleting the inputs.
+  let p1 = SstBuilder::new()
+  p1.add({ key: b"a", seq: 1UL, value: Some(b"v1") })
+  p1.add({ key: b"b", seq: 3UL, value: Some(b"v3") })
+  write(Storage::Memory(ms), "L1_3_1.sst", p1.finish())
+  let p2 = SstBuilder::new()
+  p2.add({ key: b"c", seq: 2UL, value: Some(b"v2") })
+  write(Storage::Memory(ms), "L1_2_2.sst", p2.finish())
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.stats().l0_files == 0)
+  assert_true(db2.get(b"a") == Some(Some(b"v1")))
+  assert_true(db2.get(b"b") == Some(Some(b"v3")))
+  assert_true(db2.get(b"c") == Some(Some(b"v2")))
+}
+
+test "db recovery keeps the tombstone l1 that suppresses an older l2" {
+  let ms = MemoryStorage::new()
+  // Crash residue of a bottom merge that suppressed the tombstone: the
+  // output was never written (everything tombstoned away) and the inputs
+  // are both still on disk. L1 keep-all preserves the tombstone — the key
+  // must read deleted, not resurrected from the stale L2 copy.
+  let l2_b = SstBuilder::new()
+  l2_b.add({ key: b"a", seq: 1UL, value: Some(b"1") })
+  write(Storage::Memory(ms), "L2_1_1.sst", l2_b.finish())
+  let l1_b = SstBuilder::new()
+  l1_b.add({ key: b"a", seq: 3UL, value: None })
+  write(Storage::Memory(ms), "L1_3_2.sst", l1_b.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db.stats().l1_files == 1)
+  assert_true(db.stats().l2_files == 1)
+  assert_true(db.get(b"a") == Some(None))
+  // The next bottom merge touching the range sweeps the stale L2.
+  db.compact_l2()
+  assert_true(db.stats().l1_files == 0)
+  assert_true(db.stats().l2_files == 0)
+  assert_true(db.get(b"a") is None)
 }

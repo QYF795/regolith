@@ -121,16 +121,15 @@ fn entry_to_string(e : Entry) -> String {
 }
 
 fn dump_db(db : Db) -> String raise DbError {
-  let l1 = match db.l1_name.val {
-    Some(n) => n
-    None => "None"
+  let mut tables = ""
+  for t in db.l1_tables.val {
+    tables = tables + "L1:" + t.name + " "
   }
-  let l2 = match db.l2_name.val {
-    Some(n) => n
-    None => "None"
+  for t in db.l2_tables.val {
+    tables = tables + "L2:" + t.name + " "
   }
   let mut s =
-    "mem_bytes=\{db.memtable.size_bytes()} wal=\{db.wal.length()} l0=\{db.l0_names.val.length()} l1=\{l1} l2=\{l2}\nmem:"
+    "mem_bytes=\{db.memtable.size_bytes()} wal=\{db.wal.length()} l0=\{db.l0_names.val.length()} \{tables}\nmem:"
   let mi = db.memtable.iter()
   while true {
     match mi.peek() {
