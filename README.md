@@ -14,7 +14,7 @@
 - **原子批量写**：`Db::write(WriteBatch)` 一次提交多键，WAL 单条记录承载，恢复时整批全有或全无
 - **快照与迭代器句柄**：`Db::snapshot()` 冻结一致性视图，活库继续写/flush/压缩期间，快照上的读与迭代器保持同一视图，可暂停可恢复
 - **崩溃一致性**：WAL 组提交 + 恢复不变量（恢复后的状态 = 某次写入序列的前缀）
-- **持久性契约诚实化**：flush 返回 = 字节已 write 到 OS 且回读校验（进程级崩溃安全）；掉电级需 fsync，受 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341) 阻塞，与 LevelDB `WriteOptions{sync=false}` 同款语义，详见 [docs/durability.md](docs/durability.md)
+- **持久性契约诚实化**：flush 返回 = 字节已 write 到 OS 且写入内容经双层 CRC 完整校验（进程级崩溃安全）；掉电级需 fsync，受 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341) 阻塞，与 LevelDB `WriteOptions{sync=false}` 同款语义，详见 [docs/durability.md](docs/durability.md)
 - **确定性**：跳表高度由固定种子的 xorshift64 流生成，行为跨后端可复现
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
 - **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite（WAL / L0 / L1 / L2）
@@ -71,7 +71,7 @@ moon run --target js src/cli -- stats
 `scan` / `scan_prefix <prefix>` / `scan_range <start> <end>`（end 为空串 =
 无上界）/ `flush` / `compact`（归并全部数据到底层 L2）/ `stats`。
 `set`/`del`/`batch` 返回 `ok` 时写入已进 memtable 与 WAL 缓冲；`flush`
-返回即已 write 到 OS 并经回读校验（进程级崩溃安全，掉电级保证见
+返回即已 write 到 OS 且写入内容经双层 CRC 完整校验（进程级崩溃安全，掉电级保证见
 [docs/durability.md](docs/durability.md)）。数据目录 `regolith-data/` 已
 git-ignore。
 
@@ -86,7 +86,7 @@ fn main raise {
   let snap = db.snapshot()
   // 多键一次原子提交（全有或全无）
   db.write(@QYF795/regolith.WriteBatch::new().put(b"a", b"1").delete(b"key"))
-  db.flush() // 主动落盘
+  db.flush() // 主动持久化（进程级）
   println(show(snap.get(b"key"))) // 仍是 Some(Some(b"value"))（冻结视图）
   println(show(db.get(b"key"))) // Some(None)（活库已推进）
   snap.close() // 释放快照钉住的表文件

@@ -13,7 +13,7 @@
   计数器（恢复时 = 现存最大 G + 1），每次压缩输出的新表物理上不可能与
   旧表同名；重复压缩无新写入时自然 no-op，零文件操作
 - **持久性契约诚实化**（初审驳回缺陷）：不再宣称 flush 未实现的保证——
-  现声明 flush 返回 = 字节已 write 到 OS 并经写后回读 + 双层 CRC 校验
+  现声明 flush 返回 = 字节已 write 到 OS 且写入内容经双层 CRC 完整校验
   （进程级崩溃安全）；掉电级需 fsync，受 x/fs 上游 PR #341 阻塞，
   与 LevelDB `WriteOptions{sync=false}` 同款语义。新增
   docs/durability.md 故障分级表，README/申报书措辞同步

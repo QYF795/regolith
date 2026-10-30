@@ -91,7 +91,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 2 | 多文件分级：L1/L2 多表、键区间两两不相交；归并输出超过 `table_size_limit`（默认 2 MiB）按键序拆分，按 S 降序维护 | ✅ | `table size limit splits compaction output into disjoint tables` |
 | 3 | 选择性 L2 归并：只并最旧 L1 + 区间重叠的 L1/L2，不触碰不相交表 | ✅ | `l2 compaction is selective: only the picked l1 group merges` |
 | 4 | 墓碑 L1 压制陈旧 L2：keep-all 下被删键不复活 | ✅ | `db recovery keeps the tombstone l1 that suppresses an older l2` |
-| 5 | 持久性契约诚实化：flush 返回 = 字节已 write 到 OS（写表后立即回读 + 双层 CRC 校验），进程级崩溃安全；掉电需要 fsync（依赖 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341)，未合并前如实声明），与 LevelDB `WriteOptions{sync=false}` 同款语义 | ✅ | [docs/durability.md](durability.md) 故障分级表；README/申报书同步声明，不再过度承诺 |
+| 5 | 持久性契约诚实化：flush 返回 = 字节已 write 到 OS（写入内容经双层 CRC 完整校验），进程级崩溃安全；掉电需要 fsync（依赖 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341)，未合并前如实声明），与 LevelDB `WriteOptions{sync=false}` 同款语义 | ✅ | [docs/durability.md](durability.md) 故障分级表；README/申报书同步声明，不再过度承诺 |
 | 6 | 新恢复算法下崩溃一致性双验证保持全绿 | ✅ | `crash consistency: 200 seeds x 40 steps`（crash_test.mbt，5 类故障）+ `tools/sim_crash.py`（独立 Python 模拟器镜像引擎算法，同 200 种子） |
 
 ## 复现步骤
