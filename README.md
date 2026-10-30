@@ -20,7 +20,7 @@
 - **范围扫描**：`scan_prefix(p)` / `scan_range(start, end)` 利用键序提前终止，不遍历范围之外的数据
 - **故障注入测试**：200 种子 × 40 步确定性崩溃套件，覆盖 LostWrite / TornWrite（WAL / L0 / L1 / L2）
 - **大规模 soak**：5 万随机操作模型对照（60% put / 15% del / 25% get），周期 flush / compact / compact_l2 / reopen 全程一致
-- **性能基准**：`moon bench` 7 项基准覆盖写路径 / 三级读路径 / 扫描 / 批写 / 压缩，实测数字见 [docs/bench.md](docs/bench.md)
+- **性能基准**：`moon bench` 8 项基准覆盖写路径 / 三级读路径 / 扫描 / 批写 / 压缩，实测数字见 [docs/bench.md](docs/bench.md)
 - **三后端 CI**：js / wasm-gc / native 测试全绿 + native 基准回归，`moon check` 零警告
 
 ## 快速开始

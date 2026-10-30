@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**91 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**99 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -49,7 +49,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 7 | README + 设计文档 + 贡献指南 | ✅ | README.md、[docs/design.md](design.md)、CONTRIBUTING.md |
 | 8 | CI：三后端测试 + 静态检查 + 基准回归 | ✅ | [.github/workflows/ci.yml](../.github/workflows/ci.yml)（js / wasm-gc / native 三后端 `moon test` + `moon check --deny-warn` + `sim_crash.py` + native `moon bench`） |
 | 9 | 无第三方依赖（仅 moonbitlang 官方 core / x） | ✅ | moon.mod 仅依赖 `moonbitlang/x` |
-| 10 | 性能基准套件：写路径 + 三级读路径 + scan/批写/压缩 7 项基准，数字入文档 | ✅ | src/bench_test.mbt（`moon bench`）；实测数字见 [docs/bench.md](bench.md) |
+| 10 | 性能基准套件：写路径 + 三级读路径 + scan/批写/压缩 8 项基准，数字入文档 | ✅ | src/bench_test.mbt（`moon bench`）；实测数字见 [docs/bench.md](bench.md) |
 
 ## M3 — 查询与写入增强 + 分级压缩（11 月轮核心交付）
 
