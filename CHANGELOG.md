@@ -6,6 +6,30 @@
 
 ## [未发布]
 
+## [0.5.0] - 2026-10-31
+
+### 新增
+
+- **格式 v3**：SSTable 数据块键压缩（前缀共享 + 块内重启点，
+  `Options::restart_interval` 默认 16）。footer/index/bloom 与 v2
+  同构、仅 magic 升级为 `RGSST3`，详见 [docs/format.md](docs/format.md)
+  与 [docs/design-prefix-compression.md](docs/design-prefix-compression.md)
+- **块内点查二分**：v3 块查找由重启点二分 + 至多 `restart_interval` 条
+  线性扫描构成（原为整块线性扫描）
+- **v3 crc2 自排除**：v3 的 crc2 覆盖 footer 除自身外的 26 字节（含
+  magic），任意字段或 magic 翻转必被检出；v2 文件保持旧 20 字节约定
+- **未来格式拒绝打开**：magic 未知但 crc2 合法的表（更新版本写入）
+  拒绝打开且文件原样保留，撕裂表照旧丢弃——版本混用从「静默丢表」
+  变为「响亮拒绝」
+- 测试 +8（往返/跨块边界/二分对照/混合升级/未来格式/损坏注入），
+  双后端 99 项全绿
+
+### 兼容
+
+- v1/v2 表完整兼容读取，旧表随压缩渐次并入 v3，无迁移步骤
+- **禁止降级**：0.5.0 写入的 v3 表在 ≤0.4.x 下会被当作损坏文件处理，
+  升级后请勿降级
+
 ### 验证
 
 - soak 5 万操作模型对照新增周期 `compact_l2` 调用：多文件选择性

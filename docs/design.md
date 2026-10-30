@@ -104,7 +104,7 @@ WAL 可以被截断（因为只丢未提交尾巴），不存在需要"部分回
 ## §5 读取路径
 
 - **点查 `get(k)`**：先查 memtable（最新），再按文件新→旧查 L0 表，然后查
-  L1，miss 落 L2。每张 v2 表先过 bloom
+  L1，miss 落 L2。每张表先过 bloom
   （[format.md §5](format.md#5-bloom-过滤器leveldb-式双哈希)）：
   权威否定直接跳过整表，避免大多数不存在的键付出磁盘读。
 - **扫描 `scan()`**：归并迭代器把 memtable + 全部 L0 + L1 + L2 的游标按
@@ -147,19 +147,20 @@ WAL 可以被截断（因为只丢未提交尾巴），不存在需要"部分回
 | **L2 触发条件：`l1_bytes ≥ l2_size_trigger` 且 `l2_bytes == 0 或 l1_bytes × l2_size_ratio ≥ l2_bytes`** | 小库不必为 L2 付第二次归并代价；L1 长不大时也不用急着归并进 L2（写放大受控） |
 | **快照 = memtable 全量拷贝 + 钉住表，不做 seq 过滤** | 快照时刻 memtable 全部条目 seq ≤ 水位线、被钉表只含更早条目，拷贝即完整状态。相比 LevelDB 的 seq 过滤读，实现更简单、读路径零额外判断；代价是建快照 O(memtable 大小) |
 | **快照钉住的表延迟删除，显式 `close()` 释放** | 压缩合并掉的旧表若被活跃快照引用则进 pending 列表，最后一个持有者 close 时物理删除。不 close 只占内存与磁盘、不影响正确性，重开数据库由恢复算法清理。显式 close 是 LevelDB/BoltDB 同款惯例（moon 0.1.20261012 无 Drop trait，见 moonbit-2026-toolchain-syntax 记忆） |
+| **键压缩 v3（前缀共享 + 块内重启点），旧表兼容读** | 补齐 LevelDB 能力集（申报书 §2）：前缀化键共享前缀只写一次、块内点查由重启点二分升级；v1/v2 表照常读，旧表随压缩渐次并入 v3。详见 [design-prefix-compression.md](design-prefix-compression.md)（决策记录含 crc2 自排除、未来格式拒绝等） |
 | **键序 = 逐字节字典序（`lexical_compare`）** | `Bytes::compare` 先比长度再比字节，混合长度键会破坏跳表/索引/归并的不变量，且让前缀扫描提前终止。全库键序统一用 `Bytes::lexical_compare`（format.md §3 有同样约定） |
 | **游标逐条校验键严格升序** | CRC 只能查字节损坏，查不出"键重复/乱序"这类语义损坏（demo-data 事故：旧版本 memtable 重复节点 bug 写入的表带重复键，被压缩静默归并传播）。游标每读一条比一次前键，违规即 `Corrupt`——一次比较的代价，换来"语义损坏绝不静默传播" |
 
 ## §7 并发与性能特性
 
 - 引擎单线程，无锁、无全局可变状态；多线程使用者自行串行化或各开一个 Db。
-- 点查最坏 O(表数 × 块内线性扫描)，实际由 bloom 短路 + 索引二分 + 块内
-  顺序扫描构成；扫描为 O(总条目) 的归并。
+- 点查最坏 O(表数 × 块内扫描)，实际由 bloom 短路 + 索引二分 + v3 块内
+  重启点二分（最多扫 `restart_interval` 条）构成；扫描为 O(总条目) 的归并。
 - memtable 默认上限 4 MiB，SST 块默认 4 KiB，L0 ≥ 4 触发压缩，
   L1 ≥ 4 MiB（且相对 L2 达到 4 倍）触发底层归并——均可通过 `Options` 调整。
 
 ## §8 未来工作
 
-- 键压缩（前缀共享）与块内重启点
+- ~~键压缩（前缀共享）与块内重启点~~ → 已交付（v3 格式，0.5.0）
 - manifest 与更多表级元数据（键统计、时间戳）
 - flush 的显式 fsync 选项（依赖 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341) 合并并发布新版本——sync 原语目前在官方依赖里尚不存在，见申报书 §5）

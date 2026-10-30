@@ -82,15 +82,45 @@ payload 非法（如 op 既非 1、2 也非 3）的记录即停止，把此前�
 有效日志前缀——这是对"写入中途崩溃留下半条记录"的唯一正确处理方式。
 有效前缀之后的字节在下次 flush 时被重写覆盖。
 
-## §4 SSTable v2
+## §4 SSTable v3 与 v2
 
-版本 2 的 SSTable 由四段组成：
+当前版本（0.5.x）写入 **v3** 表，并完整兼容读取 v1、v2 表（0.4.x 及更早
+写入）。三种版本的区别仅在数据块编码与 magic：footer 布局、索引与 bloom
+段完全一致，版本互读不需要任何转换。**禁止降级**：能写 v3 的版本不要回退
+到 0.4.x 继续写入（旧版会把 v3 表当损坏文件处理）。
+
+SSTable 由四段组成：
 
 ```
 blocks* index bloom footer
 ```
 
-### 数据块
+### 数据块（v3：前缀共享 + 块内重启点）
+
+```
+v3 block  := entry* restarts
+restarts  := off(u32 LE)* num_r(u32 LE)
+v3 entry  := shared(varint) unshared(varint) tomb(varint) seq(varint)
+             vl(varint) suffix(unshared) value(vl)
+```
+
+- 每条目与**同块内前一条目**共享键前缀：`shared` 为共享字节数，
+  `unshared` 为后缀字节数，键 = `prev_key[0..shared) ++ suffix`。
+- 每 `restart_interval`（默认 16）条是**重启点**：存完整键（`shared = 0`），
+  其块内偏移记入 `restarts` 数组。块首条目恒为重启点（`num_r ≥ 1`）；
+  每块的重建独立（块自包含），块边界处前缀共享归零。
+- `restarts` 位于块尾：`num_r` 个 u32 LE 偏移 + 一个 u32 LE 计数（无块头
+  count；条目区在 `num_r` 个偏移之前结束）。偏移必须严格递增、首偏移 = 0、
+  全部落在条目区内；重启键必须严格升序且每键为完整键（`shared = 0`）。
+- `tomb` / `seq` / `vl` 语义与 v2 相同（见下）。
+- 键**严格升序**排列；块在 `block_size`（默认 4096 字节）边界附近封块。
+  升序 = 逐字节字典序（`Bytes::lexical_compare`）。注意 `Bytes::compare` 是
+  长度优先比较，混合长度键时两者不一致——全库键序（跳表、索引、合并
+  迭代器）一律使用字典序。
+- **块内查找**：对重启键二分（上界）定位候选重启点，再线性解码至多
+  `restart_interval` 条。任意 `shared > 前键长度` 都是损坏（§8）。
+
+### 数据块（v2：未压缩，兼容读取）
 
 ```
 block := count(varint) entry*
@@ -99,10 +129,7 @@ entry := tomb(varint) seq(varint) kl(varint) key vl(varint) value
 
 - `tomb`：0 = 存活值，1 = 墓碑（`vl` 恒为 0，读取为已删除）。
 - `seq`：该写入的全局序列号。
-- 键**严格升序**排列；块在 `block_size`（默认 4096 字节）边界附近封块。
-  升序 = 逐字节字典序（`Bytes::lexical_compare`）。注意 `Bytes::compare` 是
-  长度优先比较，混合长度键时两者不一致——全库键序（跳表、索引、合并
-  迭代器）一律使用字典序。
+- 键严格升序（同 v3）。0.4.x 及更早版本写入的表用本布局。
 
 ### 索引
 
@@ -128,15 +155,28 @@ bloom := n(varint) m_bits(varint) bits
 ### Footer（30 字节）
 
 ```
-footer := idx_off(u64 LE) bloom_off(u64 LE) crc(u32 LE) crc2(u32 LE) magic("RGSST2")
+footer := idx_off(u64 LE) bloom_off(u64 LE) crc(u32 LE) crc2(u32 LE) magic(6B)
 ```
 
 - `idx_off`：索引段起始偏移；`bloom_off`：bloom 段起始偏移。
   约束 `idx_off < bloom_off ≤ len − 30`。
 - `crc`：覆盖 `[0, bloom_off)` 全部内容——所有数据块、索引和 bloom 段。
-- `crc2`：覆盖 footer 前 20 字节（两个偏移 + `crc`）。
+- `crc2`：footer 自校验，magic 为 `"RGSST3"`（v3）或 `"RGSST2"`（v2）。
+  - **v3**：覆盖 footer 除 crc2 字段外的全部 26 字节——两个偏移 + `crc` +
+    6 字节 magic（"自排除"约定）。因此 magic 与数据字段共同受保护，
+    任意字段或 magic 被翻转都会使 crc2 校验失败。
+  - **v2**：覆盖 footer 前 20 字节（两个偏移 + `crc`），与 0.4.x 已发布
+    文件一致。
 - 两层校验和保证：**文件中任意一个字节被翻转，整表不可读**，
   读操作不可能返回静默损坏的数据。
+
+### 未来格式拒绝
+
+打开表时若 magic 不在已知集合内，但 crc2 校验通过（按 v2 或 v3 两种约定
+均不匹配才判损坏），则该文件是**更新版本**写入的合法表：以
+`DbError::Corrupt` 拒绝打开（而不是当损坏删除）——撕裂写入的随机尾部
+恰好通过 crc2 的概率为 2⁻³²，删除反而会误删未来版本的数据。升级到新
+版本后可正常打开。
 
 ## §5 Bloom 过滤器（LevelDB 式双哈希）
 
@@ -218,5 +258,8 @@ v1 表没有 bloom 段，查询视其恒为"可能存在"（语义不变，仅�
 | WAL 记录 | 长度越界 / crc 不匹配 / payload 非法 | 记录及其后全部丢弃（视为未提交的截断尾巴） |
 | SST 任意字节 | `crc` 或 `crc2` 不匹配 | 整表不可读，`DbError::Corrupt` |
 | 索引结构 | 键序、偏移序、边界、magic | 同上 |
+| v3 重启段 | 计数为 0 或超出块、偏移非严格递增 / 首偏移 ≠ 0 / 指向条目区外、重启键非严格升序或非完整键（shared ≠ 0） | 同上 |
+| v3 条目 | `shared` 为负或超过前键长度、`unshared`/`vl` 越出条目区 | 同上 |
 | SST 块内键序 | 游标逐条比较：当前键 ≤ 前键（重复或乱序） | `DbError::Corrupt`——CRC 查不出的语义损坏（如旧版本 bug 写入的重复键），读取即报错，压缩拒绝归并传播 |
+| 未来格式表 | magic 未知但 crc2 校验通过（撕裂尾部巧合通过概率 2⁻³²） | 拒绝打开（`DbError::Corrupt`），文件**原样保留**待升级后读取 |
 | 文件名 | 非法 SST 名 | 恢复期忽略（未来版本可扩展文件名族） |

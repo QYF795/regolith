@@ -89,6 +89,32 @@ test "bench get from L0 sstable (2000 x 64B)" (it : @bench.T) {
 }
 
 ///|
+test "bench get from L0 sstable v3 (long shared prefixes)" (it : @bench.T) {
+  // Prefix-compression-shaped keys: a 40-byte shared prefix + 6-byte
+  // suffix. v3 stores the prefix once per restart interval and in-block
+  // lookups go through the restart binary search.
+  let db = @QYF795/regolith.Db::open_memory()
+  let prefix = @utf8.encode("user:00000:session:deadbeefcafe/segment/")
+  for i = 0; i < N_KEYS; i = i + 1 {
+    db.put(prefix + bench_key(i), bench_value())
+  }
+  db.flush()
+  let mut i = 0
+  it.bench(fn() {
+    try {
+      it.keep(db.get(prefix + bench_key(i)))
+    } catch {
+      _ => ()
+    }
+    i = i + 1
+    if i >= N_KEYS {
+      i = 0
+    }
+  })
+  db.close()
+}
+
+///|
 test "bench get from L2 sstable (2000 x 64B)" (it : @bench.T) {
   let opts = @QYF795/regolith.Options::default().with_l2_size_trigger(65_536)
   let db = @QYF795/regolith.Db::open_with_options(

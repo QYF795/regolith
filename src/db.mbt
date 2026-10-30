@@ -242,7 +242,7 @@ pub fn Db::flush(self : Db) -> Unit raise DbError {
   // 1. Seal the WAL: every write we are about to table is durable first.
   write(self.storage, "WAL", self.wal.encode())
   // 2. Build the table from the memtable.
-  let builder = SstBuilder::new(block_size=self.opts.block_size)
+  let builder = SstBuilder::new(block_size=self.opts.block_size, restart_interval=self.opts.restart_interval)
   let mi = self.memtable.iter()
   while true {
     match mi.peek() {
@@ -439,7 +439,7 @@ fn Db::merge_to_tables(
   suppress : Bool
 ) -> Array[Table] raise DbError {
   let tables : Array[Table] = []
-  let mut builder = SstBuilder::new(block_size=self.opts.block_size)
+  let mut builder = SstBuilder::new(block_size=self.opts.block_size, restart_interval=self.opts.restart_interval)
   let mut piece_seq = 0UL
   let mut piece_first : Option[Bytes] = None
   let mut piece_last : Option[Bytes] = None
@@ -463,7 +463,7 @@ fn Db::merge_to_tables(
         if piece_entries > 0 && builder.approx_size() + est >= limit {
           let t = self.seal_piece(builder, level, piece_seq, piece_first, piece_last)
           tables.push(t)
-          builder = SstBuilder::new(block_size=self.opts.block_size)
+          builder = SstBuilder::new(block_size=self.opts.block_size, restart_interval=self.opts.restart_interval)
           piece_seq = 0UL
           piece_first = None
           piece_last = None
@@ -731,7 +731,10 @@ fn parse_table_name(name : String) -> Option[ParsedName] {
   }
 }
 
-/// Reads and parses one table file; a missing or unparsable file is removed.
+/// Reads and parses one table file; a missing or torn (unparsable) file is
+/// removed. A table whose footer checks out but whose magic is unknown was
+/// written by a newer format version — deleting it would destroy data, so
+/// the open fails loudly instead (upgrade regolith to read it).
 fn Db::load_table(self : Db, name : String, seq : UInt64) -> Option[Table] raise DbError {
   match read(self.storage, name) {
     None => None
@@ -743,6 +746,11 @@ fn Db::load_table(self : Db, name : String, seq : UInt64) -> Option[Table] raise
       }
       match parsed {
         None => {
+          if is_future_format(bytes) {
+            raise DbError::Corrupt(
+              "sst: \{name} was written by a newer format version; refusing to open (upgrade regolith to read it)"
+            )
+          }
           remove(self.storage, name)
           None
         }

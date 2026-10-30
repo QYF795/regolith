@@ -94,6 +94,18 @@ C 编译器，由 CI 验证，见 §M2）。
 | 5 | 持久性契约诚实化：flush 返回 = 字节已 write 到 OS（写入内容经双层 CRC 完整校验），进程级崩溃安全；掉电需要 fsync（依赖 x/fs 上游 [PR #341](https://github.com/moonbitlang/x/pull/341)，未合并前如实声明），与 LevelDB `WriteOptions{sync=false}` 同款语义 | ✅ | [docs/durability.md](durability.md) 故障分级表；README/申报书同步声明，不再过度承诺 |
 | 6 | 新恢复算法下崩溃一致性双验证保持全绿 | ✅ | `crash consistency: 200 seeds x 40 steps`（crash_test.mbt，5 类故障）+ `tools/sim_crash.py`（独立 Python 模拟器镜像引擎算法，同 200 种子） |
 
+## M6 — 键压缩与格式 v3（前缀共享 + 块内重启点）
+
+| # | 验收项 | 状态 | 证明 |
+|---|---|---|---|
+| 1 | 格式 v3：数据块前缀压缩 + 块尾重启点数组，footer/index/bloom 与 v2 同构、magic `RGSST3`；`Options::restart_interval`（默认 16）可调 | ✅ | [docs/format.md](format.md) §4；`sstable builder encodes v3 prefix compression` 系列 |
+| 2 | 往返正确性：值/墓碑/空值（活值）/长键/极端前缀（0 共享、全共享、1 字节共享），重启点前一条目、跨块与块边界条目全部可读 | ✅ | `v3 prefix compression round trip`、`v3 prefix compression across block and restart boundaries` |
+| 3 | 块内点查二分与全序线性扫描逐键对照（LCG 生成 500 键 + 缺席探测） | ✅ | `v3 restart binary search matches full linear scan` |
+| 4 | 升级路径：v2+v3 表共存读写、压缩吞并 v2 重写为 v3、重开数据完好；v2 空首键回归修复 | ✅ | `v2 and v3 tables coexist (upgrade path)`、`v2 table with an empty first key still parses`、`db recovers mixed v2 and v3 tables and compacts them into v3` |
+| 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
+| 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
+| 7 | 回归全绿：双后端 99 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+
 ## 复现步骤
 
 ```bash

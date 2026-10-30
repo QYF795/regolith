@@ -910,3 +910,61 @@ test "db recovery keeps the tombstone l1 that suppresses an older l2" {
   assert_true(db.stats().l2_files == 0)
   assert_true(db.get(b"a") is None)
 }
+
+test "db recovers mixed v2 and v3 tables and compacts them into v3" {
+  let ms = MemoryStorage::new()
+  // A v2 table as a 0.4.x binary would have left it, next to a v3 table
+  // from a newer run.
+  write(Storage::Memory(ms), "L1_1.sst", build_v2_table(
+    [{ key: b"a", seq: 1UL, value: Some(b"1") }, { key: b"c", seq: 2UL, value: Some(b"2") }],
+  ))
+  let b3 = SstBuilder::new()
+  b3.add({ key: b"b", seq: 3UL, value: Some(b"3") })
+  b3.add({ key: b"d", seq: 4UL, value: Some(b"4") })
+  write(Storage::Memory(ms), "L1_3.sst", b3.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db.stats().l1_files == 2)
+  assert_true(db.get(b"a") == Some(Some(b"1")))
+  assert_true(db.get(b"b") == Some(Some(b"3")))
+  assert_true(db.get(b"c") == Some(Some(b"2")))
+  assert_true(db.get(b"d") == Some(Some(b"4")))
+  // A memtable write whose flush range overlaps both tables.
+  db.put(b"c", b"5")
+  db.flush()
+  assert_true(db.get(b"c") == Some(Some(b"5")))
+  // Manual compaction swallows both formats and rewrites the range as v3.
+  db.compact()
+  assert_true(db.stats().l0_files == 0)
+  assert_true(db.stats().l1_files == 1)
+  assert_true(db.get(b"a") == Some(Some(b"1")))
+  assert_true(db.get(b"b") == Some(Some(b"3")))
+  assert_true(db.get(b"c") == Some(Some(b"5")))
+  assert_true(db.get(b"d") == Some(Some(b"4")))
+  let db2 = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db2.get(b"a") == Some(Some(b"1")))
+  assert_true(db2.get(b"b") == Some(Some(b"3")))
+  assert_true(db2.get(b"c") == Some(Some(b"5")))
+  assert_true(db2.get(b"d") == Some(Some(b"4")))
+}
+
+test "db refuses future-format tables without deleting them" {
+  let ms = MemoryStorage::new()
+  let future = build_future_table([{ key: b"a", seq: 1UL, value: Some(b"1") }])
+  write(Storage::Memory(ms), "L1_9.sst", future)
+  let r = try {
+    let _ = Db::open_with_options(Storage::Memory(ms), Options::default())
+    None
+  } catch {
+    e => Some(e)
+  }
+  match r {
+    Some(DbError::Corrupt(_)) => ()
+    _ => abort("expected Corrupt from a future-format table")
+  }
+  // The file survives byte-for-byte: a newer regolith can still open this
+  // directory after upgrading.
+  match read(Storage::Memory(ms), "L1_9.sst") {
+    Some(bytes) => assert_true(bytes == future)
+    None => abort("future-format table was deleted")
+  }
+}

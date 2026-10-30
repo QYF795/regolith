@@ -18,6 +18,9 @@ pub(all) struct Options {
   /// Target byte size of one L1/L2 compaction output table. A merge larger
   /// than this is split into several tables with disjoint key ranges.
   table_size_limit : Int
+  /// Prefix-compression restart interval inside v3 data blocks: every
+  /// restart_interval-th entry stores its full key.
+  restart_interval : Int
 }
 
 pub fn Options::default() -> Options {
@@ -28,6 +31,7 @@ pub fn Options::default() -> Options {
     l2_size_trigger: 4_194_304,
     l2_size_ratio: 4,
     table_size_limit: 2_097_152,
+    restart_interval: 16,
   }
 }
 
@@ -39,6 +43,7 @@ pub fn Options::with_memtable_limit(self : Options, n : Int) -> Options {
     l2_size_trigger: self.l2_size_trigger,
     l2_size_ratio: self.l2_size_ratio,
     table_size_limit: self.table_size_limit,
+    restart_interval: self.restart_interval,
   }
 }
 
@@ -50,6 +55,7 @@ pub fn Options::with_compaction_trigger(self : Options, n : Int) -> Options {
     l2_size_trigger: self.l2_size_trigger,
     l2_size_ratio: self.l2_size_ratio,
     table_size_limit: self.table_size_limit,
+    restart_interval: self.restart_interval,
   }
 }
 
@@ -62,6 +68,7 @@ pub fn Options::with_l2_size_trigger(self : Options, n : Int) -> Options {
     l2_size_trigger: n,
     l2_size_ratio: self.l2_size_ratio,
     table_size_limit: self.table_size_limit,
+    restart_interval: self.restart_interval,
   }
 }
 
@@ -74,6 +81,7 @@ pub fn Options::with_l2_size_ratio(self : Options, n : Int) -> Options {
     l2_size_trigger: self.l2_size_trigger,
     l2_size_ratio: n,
     table_size_limit: self.table_size_limit,
+    restart_interval: self.restart_interval,
   }
 }
 
@@ -87,5 +95,20 @@ pub fn Options::with_table_size_limit(self : Options, n : Int) -> Options {
     l2_size_trigger: self.l2_size_trigger,
     l2_size_ratio: self.l2_size_ratio,
     table_size_limit: n,
+    restart_interval: self.restart_interval,
+  }
+}
+
+/// Sets the prefix-compression restart interval inside v3 data blocks (see
+/// `restart_interval`).
+pub fn Options::with_restart_interval(self : Options, n : Int) -> Options {
+  {
+    memtable_limit: self.memtable_limit,
+    block_size: self.block_size,
+    l0_compaction_trigger: self.l0_compaction_trigger,
+    l2_size_trigger: self.l2_size_trigger,
+    l2_size_ratio: self.l2_size_ratio,
+    table_size_limit: self.table_size_limit,
+    restart_interval: n,
   }
 }
