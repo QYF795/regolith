@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**100 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**101 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -82,6 +82,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 7 | mooncakes.io 0.2.0（快照版）发布，消费方 `moon add` 后端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：快照冻结视图（活库推进后 snap 读不变、absent 键区分）、snapshot.scan_range、close、reopen 持久化全部符合预期 |
 | 8 | 0.3.x 系列（CLI batch + 性能基准 + soak + 损坏检测演示）发布，消费方 `moon add --upgrade` 端到端验证 | ✅ | `moon publish` 200 OK ×4（0.3.0/0.3.1/0.3.2/0.3.3）；消费方验证：升级后 WriteBatch 多键原子提交、快照冻结视图、压缩墓碑清除、reopen 持久化端到端；README 示例逐字编译运行（0.3.1 修正 core 弃用 `Option::to_string` 导致的消费方警告；0.3.2 同步 soak；0.3.3 同步损坏检测演示与 CHANGELOG） |
 | 9 | 大规模 soak：5 万随机操作（60% put / 15% del / 25% get）模型对照，周期 flush / compact / compact_l2 / 全量 close-reopen，读、扫描、恢复三方一致 | ✅ | `soak 50000 random ops against model with flush compact compact_l2 reopen`（xorshift32 确定性工作负载；compact_l2 紧随 compact 同拍执行，reopen 需从 L2 表重建状态；每次 reopen 后全量扫描与模型逐键对照） |
+| 10 | 快照 soak：1 万随机操作（put/del/建快照/关快照/抽查，周期 flush/compact/compact_l2），每个活跃快照的全扫描与随机点查等于创建时刻的冻结模型拷贝 | ✅ | `snapshot soak: live snapshots stay frozen across random ops` |
 
 ## M5 — 初审修复版（多文件分级压缩 + 持久性契约）
 
@@ -104,7 +105,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 4 | 升级路径：v2+v3 表共存读写、压缩吞并 v2 重写为 v3、重开数据完好；v2 空首键回归修复 | ✅ | `v2 and v3 tables coexist (upgrade path)`、`v2 table with an empty first key still parses`、`db recovers mixed v2 and v3 tables and compacts them into v3` |
 | 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
 | 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
-| 7 | 回归全绿：双后端 100 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+| 7 | 回归全绿：双后端 101 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
 | 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
 | 9 | 随机字节损坏 fuzz：任意位置 1–2 字节翻转 200 种子，结果只能是 Corrupt 拒绝或（CRC 碰撞漏检时）与构造输入一致的完整往返 | ✅ | `v3 random byte corruption never yields wrong data` |
 

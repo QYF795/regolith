@@ -113,3 +113,110 @@ test "soak 50000 random ops against model with flush compact compact_l2 reopen" 
   check_scan(db, keys, model)
   db.close()
 }
+
+/// Snapshot soak: while the live db keeps writing, flushing and compacting,
+/// every active snapshot must keep answering with the exact state that
+/// existed at its creation. The model records a full key-value copy at each
+/// snapshot point; random probes compare snapshot scans and gets against it.
+const SNAP_KEYS : Int = 64
+const SNAP_OPS : Int = 10_000
+
+/// Full-scan check of one snapshot against its frozen model copy.
+fn check_snap_scan(
+  snap : Snapshot,
+  keys : FixedArray[Bytes],
+  model : FixedArray[Option[Bytes]]
+) -> Unit raise {
+  let it = snap.scan()
+  let mut mi = 0
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => match e.value {
+        None => ()
+        Some(v) => {
+          while mi < SNAP_KEYS && model[mi] is None {
+            mi = mi + 1
+          }
+          assert_true(mi < SNAP_KEYS, msg="snap soak: scan yielded more keys than the frozen model")
+          assert_true(e.key == keys[mi], msg="snap soak: scan key order mismatch")
+          assert_true(model[mi] == Some(v), msg="snap soak: scan value mismatch")
+          mi = mi + 1
+        }
+      }
+    }
+  }
+  assert_true(it.error() is None, msg="snap soak: snapshot scan reported an error")
+  while mi < SNAP_KEYS {
+    assert_true(model[mi] is None, msg="snap soak: scan missed a frozen model key")
+    mi = mi + 1
+  }
+}
+
+test "snapshot soak: live snapshots stay frozen across random ops" {
+  let keys : FixedArray[Bytes] = FixedArray::makei(SNAP_KEYS, fn(i) { soak_key(i) })
+  let model : FixedArray[Option[Bytes]] = FixedArray::make(SNAP_KEYS, None)
+  let db = Db::open_memory()
+  // (snapshot handle, full model copy frozen at creation)
+  let snaps : Array[(Snapshot, FixedArray[Option[Bytes]])] = []
+  let mut seed : UInt = 0x1234ABCD
+  for op = 0; op < SNAP_OPS; op = op + 1 {
+    seed = soak_xorshift(seed)
+    let i = (seed % 64U).reinterpret_as_int()
+    let r = (seed % 100U).reinterpret_as_int()
+    // 60 put / 10 del / 4 snapshot / 4 close / 22 probe
+    if r < 60 {
+      db.put(keys[i], soak_value(op))
+      model[i] = Some(soak_value(op))
+    } else if r < 70 {
+      db.delete(keys[i])
+      model[i] = None
+    } else if r < 74 && snaps.length() < 8 {
+      let frozen : FixedArray[Option[Bytes]] = FixedArray::make(SNAP_KEYS, None)
+      for j = 0; j < SNAP_KEYS; j = j + 1 {
+        frozen[j] = model[j]
+      }
+      snaps.push((db.snapshot(), frozen))
+    } else if r < 78 && snaps.length() > 0 {
+      let idx = (seed % 8U).reinterpret_as_int() % snaps.length()
+      snaps[idx].0.close()
+      // swap-remove keeps the array compact without an O(n) shift
+      snaps[idx] = snaps[snaps.length() - 1]
+      let _ = snaps.pop()
+    } else if snaps.length() > 0 {
+      let idx = (seed % 8U).reinterpret_as_int() % snaps.length()
+      let (snap, frozen) = snaps[idx]
+      check_snap_scan(snap, keys, frozen)
+      for _p = 0; _p < 8; _p = _p + 1 {
+        seed = soak_xorshift(seed)
+        let ki = (seed % 64U).reinterpret_as_int()
+        match snap.get(keys[ki]) {
+          None => assert_true(frozen[ki] is None, msg="snap soak: frozen get None mismatch")
+          Some(None) => assert_true(frozen[ki] is None, msg="snap soak: frozen get tombstone mismatch")
+          Some(Some(v)) => assert_true(frozen[ki] == Some(v), msg="snap soak: frozen get value mismatch")
+        }
+      }
+    }
+    if op % 500 == 499 {
+      db.flush()
+    }
+    if op % 2_500 == 2_499 {
+      db.compact()
+    }
+    if op % 5_000 == 4_999 {
+      db.compact_l2()
+    }
+  }
+  for j = 0; j < snaps.length(); j = j + 1 {
+    snaps[j].0.close()
+  }
+  // Final check against the live db (check_scan is hard-wired to SOAK_KEYS).
+  for j = 0; j < SNAP_KEYS; j = j + 1 {
+    match db.get(keys[j]) {
+      None => assert_true(model[j] is None, msg="snap soak: final get None mismatch")
+      Some(None) => assert_true(model[j] is None, msg="snap soak: final get tombstone mismatch")
+      Some(Some(v)) => assert_true(model[j] == Some(v), msg="snap soak: final get value mismatch")
+    }
+  }
+  db.close()
+}
