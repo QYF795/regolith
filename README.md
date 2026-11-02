@@ -131,6 +131,12 @@ docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.m
 版本历史见 [CHANGELOG.md](https://github.com/QYF795/regolith/blob/main/CHANGELOG.md)
 （链接指向 GitHub 仓库，mooncakes 包页上同样可点）。
 
+## 参与
+
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题的报告渠道与
+威胁模型边界见 [SECURITY.md](SECURITY.md)（数据完整性在范围内，网络/
+对抗不在——如实声明）。
+
 ## 许可证
 
 [Apache-2.0](LICENSE)
