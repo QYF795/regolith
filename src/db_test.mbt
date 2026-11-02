@@ -755,6 +755,30 @@ test "repeated compaction without new writes is a no-op (file)" {
   }
 }
 
+test "Db::open on a fresh path creates the directory and data survives reopen" {
+  let dir = "regolith-test-open-create"
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+  // Quick-start contract: Db::open("data") works out of the box, no setup.
+  let db = Db::open(dir)
+  assert_true(@fs.path_exists(dir), msg="open did not create \{dir}")
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.compact()
+  let db2 = Db::open(dir)
+  assert_true(db2.get(b"a") == Some(Some(b"1")), msg="a lost across reopen")
+  assert_true(db2.get(b"b") == Some(Some(b"2")), msg="b lost across reopen")
+  let keys = collect_range(db2.scan_range(b"", None))
+  assert_true(keys.length() == 2, msg="scan after reopen: \{keys.length()} keys")
+  assert_true(keys[0] == b"a")
+  assert_true(keys[1] == b"b")
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+}
+
 test "table size limit splits compaction output into disjoint tables" {
   let ms = MemoryStorage::new()
   let opts = Options::default()
