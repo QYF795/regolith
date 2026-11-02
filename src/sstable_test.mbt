@@ -606,3 +606,52 @@ test "v3 block corruption is detected" {
   let t5 = build_v3_table([entry(b"aa", 1UL, Some(b"v"))], 16)
   expect_corrupt_get(set_v3_byte(t5, v3_block_end(t5) - 4, 127), b"aa")
 }
+
+/// Deterministic byte-corruption fuzz: for 200 seeds, flip one random byte
+/// (half the seeds flip a second, distinct byte) at a random position of a
+/// valid v3 table. Every outcome must be one of two shapes: parse raises
+/// Corrupt (the CRC gate or the v3 restart validation caught the damage),
+/// or parse succeeds and the full key/value round trip still agrees with the
+/// builder's entries — the 2^-32 CRC-collision case. Either way, damage can
+/// never surface as silently wrong data or as a crash outside Corrupt.
+test "v3 random byte corruption never yields wrong data" {
+  let entries : Array[Entry] = []
+  for i = 0; i < 64; i = i + 1 {
+    let k = z_key(i)
+    let v = Bytes::make(8 + i % 5, (i % 251).to_byte())
+    entries.push(entry(k, (i + 1).to_uint64(), Some(v)))
+  }
+  let good = build_v3_table(entries, 8)
+  let n = good.length()
+  let state = Ref(1L)
+  for _s = 0; _s < 200; _s = _s + 1 {
+    let p1 = (state.val & 0x7FFFFFFFL).to_int() % n
+    let v1 = ((state.val >> 8) & 0xFFL).to_int()
+    state.val = (state.val * 1103515245L + 12345L) & 0x7FFFFFFFL
+    let arr = good.to_array()
+    arr[p1] = v1.to_byte()
+    // Half the seeds flip a second, distinct byte.
+    if (state.val & 1L) == 1L {
+      let p2 = ((state.val >> 16) & 0x7FFFFFFFL).to_int() % n
+      if p2 != p1 {
+        let v2 = ((state.val >> 24) & 0xFFL).to_int()
+        arr[p2] = v2.to_byte()
+      }
+    }
+    state.val = (state.val * 1103515245L + 12345L) & 0x7FFFFFFFL
+    let res = try {
+      let r = parse(Bytes::from_array(arr))
+      for i = 0; i < entries.length(); i = i + 1 {
+        assert_true(r.get(entries[i].key) == Some(entries[i].value))
+      }
+      None
+    } catch {
+      e => Some(e)
+    }
+    match res {
+      Some(DbError::Corrupt(_)) => ()
+      Some(_) => abort("corruption surfaced as non-Corrupt")
+      None => () // parse survived the checksum: round trip verified above
+    }
+  }
+}

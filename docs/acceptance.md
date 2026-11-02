@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**99 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**100 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -104,8 +104,9 @@ C 编译器，由 CI 验证，见 §M2）。
 | 4 | 升级路径：v2+v3 表共存读写、压缩吞并 v2 重写为 v3、重开数据完好；v2 空首键回归修复 | ✅ | `v2 and v3 tables coexist (upgrade path)`、`v2 table with an empty first key still parses`、`db recovers mixed v2 and v3 tables and compacts them into v3` |
 | 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
 | 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
-| 7 | 回归全绿：双后端 99 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+| 7 | 回归全绿：双后端 100 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
 | 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
+| 9 | 随机字节损坏 fuzz：任意位置 1–2 字节翻转 200 种子，结果只能是 Corrupt 拒绝或（CRC 碰撞漏检时）与构造输入一致的完整往返 | ✅ | `v3 random byte corruption never yields wrong data` |
 
 ## 复现步骤
 

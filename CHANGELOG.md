@@ -6,6 +6,13 @@
 
 ## [未发布]
 
+### 测试
+
+- 新增 v3 随机字节损坏 fuzz（200 种子 × 1–2 处随机翻转）：每种结果要么
+  是 Corrupt 拒绝，要么 CRC 碰撞漏检（概率 2⁻³²）时全量键值往返与构造
+  输入一致——损坏绝不表现为静默错数据或 Corrupt 之外的崩溃，双后端
+  100 项全绿
+
 ### 开源合规
 
 - 新增 NOTICE.md（版权归属 + 第三方依赖声明，Apache-2.0 配套）
@@ -18,6 +25,11 @@
   l2_size_trigger / l2_size_ratio / table_size_limit / restart_interval
   默认值与语义）
 - CI bench 任务注释同步基准数 7→8（与 docs/bench.md 一致）
+
+### 依赖
+
+- moonbitlang/x 0.5.5 → 0.5.7（0.5.6/0.5.7 变更集中于 @time/@unicode/
+  @encoding，@fs 用法无碍；99 测试 + sim_crash 200 种子验证）
 
 ## [0.5.0] - 2026-10-31
 
