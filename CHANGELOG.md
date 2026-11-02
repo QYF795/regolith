@@ -28,6 +28,11 @@
 - 新增 NOTICE.md（版权归属 + 第三方依赖声明，Apache-2.0 配套）
 - 新增 PR 模板与 issue 模板（bug 报告 / 功能建议），呼应 CONTRIBUTING 清单
 - 仓库元数据：简介、主页（mooncakes 包页）、主题标签
+- 上游跟踪状态校准：moonbitlang/moon #2293（wasm 宿主 import）被上游
+  关闭——维护者倾向复用 moonbitlang/async 的新 FFI 系列，旧 x/fs 形态
+  不再新增；moonbitlang/x #341（native 原语）仍开放待合并。
+  docs/durability.md 上游跟踪段、申报书 §5/§6、立项说明生态共创段
+  同步校准，wasm sync 路径如实移交上游新 FFI 方向
 
 ### 文档
 

@@ -48,11 +48,20 @@
 ## 上游跟踪
 
 `fsync` 依赖 moonbitlang/x 上游 [PR #341](https://github.com/moonbitlang/x/pull/341)
-（为 `x/fs` 增加 sync 原语）。合并并发布新版本后，regolith 将：
+（为 `x/fs` 增加 append/sync/rename 原语）。合并并发布新版本后，regolith 将：
 
 - 新增 `Options::sync`（默认 `false`，与 LevelDB 默认一致）；
 - `sync=true` 时 flush 末尾对 WAL 与表文件调用 fsync，把保证从等级 ①
   提升到等级 ②；
 - 升级后把本文件与 README、申报书中的声明同步更新，并在 CI 里加对应验证。
+
+当前状态（2026-11-03）：
+
+- **#341（x/fs 原生原语）**：开放、可合并（CI 修复轮次已 rebase），覆盖
+  native 后端——合并后 `Options::sync` 对 native 用户生效。
+- **#2293（moon run 的 wasm host import，#341 的配套 PR）**：已被上游
+  关闭（2026-10-30）。维护者回复：倾向于复用 moonbitlang/async 的新 FFI
+  系列，旧 x/fs 形态的 host import 不再新增、未来会移除。wasm 后端的
+  sync 能力因此取决于上游新 FFI 方向的落地，不再由本项目的 PR 提供。
 
 在此之前，任何"掉电不丢数据"的说法都不属于 regolith 的契约。
