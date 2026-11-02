@@ -968,3 +968,145 @@ test "db refuses future-format tables without deleting them" {
     None => abort("future-format table was deleted")
   }
 }
+
+/// Fixed-width key "k0000".."k0063": lexicographic order == numeric order.
+fn live_key(i : Int) -> Bytes {
+  let s = i.to_string()
+  let mut k = "k"
+  for _j = 0; _j < 4 - s.length(); _j = _j + 1 {
+    k = k + "0"
+  }
+  @utf8.encode(k + s)
+}
+
+/// Linear index lookup for the live-iterator test (64 keys is tiny).
+fn find_live_key(key : Bytes) -> Int {
+  for i = 0; i < 64; i = i + 1 {
+    if live_key(i) == key {
+      return i
+    }
+  }
+  abort("live iter: key outside the test key space")
+}
+
+/// The live iterator is NOT a snapshot: writes after its creation may show
+/// up (LevelDB-style non-isolated semantics). But the structure must stay
+/// sound — strictly ascending keys, no duplicates, every value one that was
+/// really written. Once a flush swaps the memtable, the iterator's memtable
+/// side freezes (the old object stays reachable) and the table side was
+/// always immutable bytes, so the remaining output must match the state at
+/// flush time exactly — even across compactions that delete table files.
+test "live iterator stays sound across interleaved writes and freezes after flush" {
+  let db = Db::open_memory()
+  // Per-key history of every value ever written, for the weak validity check.
+  let history : FixedArray[Array[Bytes]] = FixedArray::makei(64, fn(_i : Int) -> Array[Bytes] { [] })
+  let mut op = 0
+  for i = 0; i < 32; i = i + 1 {
+    let v = @utf8.encode("v" + op.to_string())
+    db.put(live_key(i), v)
+    history[i].push(v)
+    op = op + 1
+  }
+  let it = db.scan()
+  let mut prev : Option[Bytes] = None
+  // Phase 1: interleave 24 writes/deletes with iterator steps. No flush yet:
+  // the memtable side is live, so new keys may surface behind the cursor and
+  // overwritten keys may come out with a newer value — but keys must stay
+  // strictly ascending with no duplicates, and values must be real history.
+  for step = 0; step < 24; step = step + 1 {
+    if step % 3 == 2 {
+      match it.next() {
+        None => ()
+        Some(e) => {
+          match prev {
+            None => ()
+            Some(p) => assert_true(e.key.lexical_compare(p) > 0, msg="live iter: keys not strictly ascending")
+          }
+          prev = Some(e.key)
+          let ki = find_live_key(e.key)
+          match e.value {
+            None => () // tombstone suppressed by the merge iterator
+            Some(v) => {
+              let mut seen = false
+              for j = 0; j < history[ki].length(); j = j + 1 {
+                if history[ki][j] == v {
+                  seen = true
+                  break
+                }
+              }
+              assert_true(seen, msg="live iter: value never written")
+            }
+          }
+        }
+      }
+    } else {
+      let ki = (step * 7 + 3) % 64
+      if step % 2 == 0 {
+        let v = @utf8.encode("v" + op.to_string())
+        db.put(live_key(ki), v)
+        history[ki].push(v)
+      } else {
+        db.delete(live_key(ki))
+      }
+      op = op + 1
+    }
+  }
+  // Phase 2: freeze point. The flush turns the current memtable into an L0
+  // table; from here on the iterator must agree exactly with the state as of
+  // this moment — the model copy below.
+  db.flush()
+  let model : FixedArray[Option[Bytes]] = FixedArray::make(64, None)
+  for i = 0; i < 64; i = i + 1 {
+    model[i] = match db.get(live_key(i)) {
+      None => None
+      Some(None) => None
+      Some(Some(v)) => Some(v)
+    }
+  }
+  // Compaction deletes table files the iterator's cursors point into; the
+  // bytes stay reachable, so the iterator must not notice.
+  db.compact()
+  db.put(live_key(0), b"post-freeze-write")
+  let mut mi = 0
+  // The iterator consumed a prefix of entries in phase 1; the remaining
+  // output is the frozen state's keys strictly after the last consumed one.
+  while mi < 64 {
+    if model[mi] is None {
+      mi = mi + 1
+      continue
+    }
+    match prev {
+      None => break
+      Some(p) => {
+        if live_key(mi).lexical_compare(p) <= 0 {
+          mi = mi + 1
+        } else {
+          break
+        }
+      }
+    }
+  }
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => match e.value {
+        None => ()
+        Some(v) => {
+          while mi < 64 && model[mi] is None {
+            mi = mi + 1
+          }
+          assert_true(mi < 64, msg="live iter: more keys than the freeze model")
+          assert_true(e.key == live_key(mi), msg="live iter: key mismatch after flush")
+          assert_true(model[mi] == Some(v), msg="live iter: value mismatch after flush")
+          mi = mi + 1
+        }
+      }
+    }
+  }
+  while mi < 64 {
+    assert_true(model[mi] is None, msg="live iter: missed a freeze-model key")
+    mi = mi + 1
+  }
+  assert_true(it.error() is None, msg="live iter: reported an error")
+  db.close()
+}

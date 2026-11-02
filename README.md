@@ -98,6 +98,13 @@ fn main raise {
 墓碑（已删除），`Some(Some(v))` = 值。三态渲染用 `show`（定义见快速开始；
 core 0.10.15 起 `Option` 的 `to_string` 已弃用，直接调用会收到弃用警告）。
 
+**迭代器语义**：`scan` / `scan_prefix` / `scan_range` 返回的迭代器**不是快照**
+——创建之后的写入可能出现在后续输出中（LevelDB 默认迭代器同款非隔离
+语义）；但键序严格升序、无重复，且 `flush` 之后剩余输出精确等于 flush
+时刻的状态（memtable 侧被换表冻结、表侧字节本就不可变），`compact`
+删除表文件也不影响已创建的迭代器。需要跨写入的冻结视图请用
+`Db::snapshot()`。
+
 配置项通过 `Options::default()` 链式覆盖，`Db::open_with_options(storage, opts)` 生效：
 
 ```moonbit
