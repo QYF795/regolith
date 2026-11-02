@@ -17,5 +17,5 @@ source = "src"
 warnings = "-test_unqualified_package"
 
 import {
-  "moonbitlang/x@0.5.5",
+  "moonbitlang/x@0.5.7",
 }

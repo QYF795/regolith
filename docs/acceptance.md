@@ -105,6 +105,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
 | 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
 | 7 | 回归全绿：双后端 99 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+| 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
 
 ## 复现步骤
 
