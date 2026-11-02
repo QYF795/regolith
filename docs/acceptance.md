@@ -110,6 +110,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
 | 9 | 随机字节损坏 fuzz：任意位置 1–2 字节翻转 200 种子，结果只能是 Corrupt 拒绝或（CRC 碰撞漏检时）与构造输入一致的完整往返 | ✅ | `v3 random byte corruption never yields wrong data` |
 | 10 | 快速开始契约：`Db::open(dir)` 对不存在的目录自动创建（无需手工 setup），写入 flush/compact 后重开点查与扫描完好 | ✅ | `Db::open on a fresh path creates the directory and data survives reopen` |
+| 11 | mooncakes.io 0.5.1（开源合规 + 语义声明 + 测试加固）发布，消费方升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.5.0 写入的库目录被 0.5.1 完整读出并继续写入重开；全新工程 `moon add` 解析 0.5.1，快速开始契约/快照冻结/批写墓碑三态/活库迭代器/reopen 持久化端到端全过 |
 
 ## 复现步骤
 

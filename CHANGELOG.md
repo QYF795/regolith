@@ -4,7 +4,7 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.5.1] - 2026-11-03
 
 ### 测试
 
@@ -48,6 +48,13 @@
 
 - moonbitlang/x 0.5.5 → 0.5.7（0.5.6/0.5.7 变更集中于 @time/@unicode/
   @encoding，@fs 用法无碍；99 测试 + sim_crash 200 种子验证）
+
+### 验证
+
+- 消费方升级验证（js 后端）：0.5.0 写入的库目录被 0.5.1 完整读出
+  （点查 + 全扫描）并继续写入重开；全新工程 `moon add` 解析 0.5.1，
+  快速开始契约（不存在目录开箱即用）、快照冻结视图、批写墓碑三态、
+  活库迭代器、flush/compact/reopen 端到端全过
 
 ## [0.5.0] - 2026-10-31
 
