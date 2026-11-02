@@ -98,6 +98,21 @@ fn main raise {
 墓碑（已删除），`Some(Some(v))` = 值。三态渲染用 `show`（定义见快速开始；
 core 0.10.15 起 `Option` 的 `to_string` 已弃用，直接调用会收到弃用警告）。
 
+配置项通过 `Options::default()` 链式覆盖，`Db::open_with_options(storage, opts)` 生效：
+
+```moonbit
+let opts = @QYF795/regolith.Options::default()
+  .with_memtable_limit(4 << 20)      // memtable 字节上限，超限自动 flush
+  .with_compaction_trigger(4)        // L0 表数触发 compact 的阈值
+  .with_l2_size_trigger(4 << 20)     // L1 字节触发 compact_l2 的阈值
+  .with_l2_size_ratio(4)             // L1/L2 大小比（写放大控制）
+  .with_table_size_limit(2 << 20)    // 压缩输出单表字节上限，超出按键序拆分
+  .with_restart_interval(16)         // v3 键压缩块内重启点间隔（条目数）
+```
+
+`with_restart_interval` 只影响新写入的 v3 表；已落盘的旧表无论格式照常
+读取。其余选项均可在重开数据库时调整，与既有表文件无关。
+
 ## 目录结构
 
 ```

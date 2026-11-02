@@ -6,6 +6,19 @@
 
 ## [未发布]
 
+### 开源合规
+
+- 新增 NOTICE.md（版权归属 + 第三方依赖声明，Apache-2.0 配套）
+- 新增 PR 模板与 issue 模板（bug 报告 / 功能建议），呼应 CONTRIBUTING 清单
+- 仓库元数据：简介、主页（mooncakes 包页）、主题标签
+
+### 文档
+
+- README 新增 Options 配置段（memtable_limit / compaction_trigger /
+  l2_size_trigger / l2_size_ratio / table_size_limit / restart_interval
+  默认值与语义）
+- CI bench 任务注释同步基准数 7→8（与 docs/bench.md 一致）
+
 ## [0.5.0] - 2026-10-31
 
 ### 新增

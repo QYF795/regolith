@@ -52,7 +52,7 @@ jobs:
         if: matrix.target == 'js'
         run: python3 tools/sim_crash.py
 
-  # Performance regression gate: the same 7 benchmarks as docs/bench.md, on
+  # Performance regression gate: the same 8 benchmarks as docs/bench.md, on
   # the native backend (the meaningful numbers; js/wasm numbers are only for
   # local convenience). The table in the log is the record — docs/bench.md
   # links here.
