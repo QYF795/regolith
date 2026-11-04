@@ -4,6 +4,25 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 测试
+
+- 新增错误路径测试：`Db::open` 指向常规文件路径 → 报 `DbError::Io`
+  （不崩溃、不误开）——错误传播链（@fs.IOError → io_failure → Io）
+  从此有 db 级守护
+- 新增 `Db::close` 封存契约测试：close = flush 且幂等，未显式 flush
+  的写入经 close 后重开仍在
+- 双后端 105 项全绿
+
+### 文档
+
+- README 新增「并发与限制」段：单进程单句柄（同目录双句柄无文件锁，
+  属未定义行为）、多线程共享需自行串行化、close = flush 幂等、路径
+  指向文件时报 Io
+- 新增 CODE_OF_CONDUCT.md（Contributor Covenant 2.1 中文版），
+  README 参与段链接
+
 ## [0.5.1] - 2026-11-03
 
 ### 测试

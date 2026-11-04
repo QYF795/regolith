@@ -779,6 +779,47 @@ test "Db::open on a fresh path creates the directory and data survives reopen" {
   }
 }
 
+test "Db::open on a path that is a regular file raises Io" {
+  let p = "regolith-test-notadir"
+  @fs.remove_dir(p) catch {
+    _ => ()
+  }
+  @fs.write_bytes_to_file(p, b"x") catch {
+    @fs.IOError(m) => assert_true(false, msg="setup: \{m}")
+  }
+  let r = try {
+    let _ = Db::open(p)
+    None
+  } catch {
+    e => Some(e)
+  }
+  match r {
+    Some(DbError::Io(_)) => ()
+    Some(DbError::Corrupt(m)) => assert_true(false, msg="unexpected Corrupt: \{m}")
+    Some(DbError::Fault(m)) => assert_true(false, msg="unexpected Fault: \{m}")
+    None => assert_true(false, msg="open on a file path must raise Io")
+  }
+  @fs.remove_file(p) catch {
+    _ => ()
+  }
+}
+
+test "Db::close seals pending writes and is idempotent" {
+  let dir = "regolith-test-close"
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+  let db = Db::open(dir)
+  db.put(b"a", b"1")
+  db.close()
+  db.close()
+  let db2 = Db::open(dir)
+  assert_true(db2.get(b"a") == Some(Some(b"1")), msg="close must seal pending writes")
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+}
+
 test "table size limit splits compaction output into disjoint tables" {
   let ms = MemoryStorage::new()
   let opts = Options::default()

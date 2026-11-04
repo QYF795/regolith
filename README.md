@@ -120,6 +120,14 @@ let opts = @QYF795/regolith.Options::default()
 `with_restart_interval` 只影响新写入的 v3 表；已落盘的旧表无论格式照常
 读取。其余选项均可在重开数据库时调整，与既有表文件无关。
 
+**并发与限制**：嵌入式引擎假定**单进程、单句柄**——同一目录同时被两个
+`Db` 打开（无论同进程还是跨进程）没有文件锁保护：WAL 是共享文件、表名
+计数器各自独立，并发写会互相覆盖，属未定义行为；多线程共享同一个 `Db`
+也需调用方自行串行化。`Db::close()` 等价于一次 `flush()`，幂等可重复
+调用——进程退出前调用它（或 `flush()`）即获得已确认写入的进程级持久化
+（边界见 [docs/durability.md](docs/durability.md)）。路径指向常规文件
+而非目录时，`Db::open` 报 `DbError::Io`，不会误开。
+
 ## 目录结构
 
 ```
@@ -135,7 +143,7 @@ docs/          [磁盘格式](docs/format.md) / [验收清单](docs/acceptance.m
 
 贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题的报告渠道与
 威胁模型边界见 [SECURITY.md](SECURITY.md)（数据完整性在范围内，网络/
-对抗不在——如实声明）。
+对抗不在——如实声明）；社区行为规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 
 ## 许可证
 
