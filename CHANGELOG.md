@@ -13,7 +13,10 @@
   从此有 db 级守护
 - 新增 `Db::close` 封存契约测试：close = flush 且幂等，未显式 flush
   的写入经 close 后重开仍在
-- 双后端 105 项全绿
+- 新增大值边界测试：3 MiB 值经 flush 与重开逐字节一致——覆盖 3 字节
+  varint 长度（键/值长 > 16 KiB）、超 table_size_limit 的单表（限制只
+  拆压缩输出、从不拆 flush 输出）、超过默认 memtable 预算的 WAL 记录
+- 双后端 106 项全绿
 
 ### 文档
 

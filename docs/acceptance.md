@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**105 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**106 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -106,13 +106,14 @@ C 编译器，由 CI 验证，见 §M2）。
 | 4 | 升级路径：v2+v3 表共存读写、压缩吞并 v2 重写为 v3、重开数据完好；v2 空首键回归修复 | ✅ | `v2 and v3 tables coexist (upgrade path)`、`v2 table with an empty first key still parses`、`db recovers mixed v2 and v3 tables and compacts them into v3` |
 | 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
 | 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
-| 7 | 回归全绿：双后端 105 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+| 7 | 回归全绿：双后端 106 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
 | 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
 | 9 | 随机字节损坏 fuzz：任意位置 1–2 字节翻转 200 种子，结果只能是 Corrupt 拒绝或（CRC 碰撞漏检时）与构造输入一致的完整往返 | ✅ | `v3 random byte corruption never yields wrong data` |
 | 10 | 快速开始契约：`Db::open(dir)` 对不存在的目录自动创建（无需手工 setup），写入 flush/compact 后重开点查与扫描完好 | ✅ | `Db::open on a fresh path creates the directory and data survives reopen` |
 | 11 | mooncakes.io 0.5.1（开源合规 + 语义声明 + 测试加固）发布，消费方升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.5.0 写入的库目录被 0.5.1 完整读出并继续写入重开；全新工程 `moon add` 解析 0.5.1，快速开始契约/快照冻结/批写墓碑三态/活库迭代器/reopen 持久化端到端全过 |
 | 12 | 错误路径：`Db::open` 指向常规文件而非目录 → 报 `DbError::Io`（不崩溃、不误开），错误经存储抽象一路传播 | ✅ | `Db::open on a path that is a regular file raises Io` |
 | 13 | `Db::close` 封存契约：close = flush（幂等），未显式 flush 的写入经 close 后重开仍在 | ✅ | `Db::close seals pending writes and is idempotent` |
+| 14 | 大值边界：3 MiB 值经 flush 与重开逐字节一致（3 字节 varint 长度、超 table_size_limit 单表、超默认 memtable 预算的 WAL 记录） | ✅ | `large value (3 MiB) survives flush and reopen byte-exact` |
 
 ## 复现步骤
 

@@ -820,6 +820,29 @@ test "Db::close seals pending writes and is idempotent" {
   }
 }
 
+test "large value (3 MiB) survives flush and reopen byte-exact" {
+  // Exercises the boundary paths a 3 MiB value hits: 3-byte varint lengths
+  // (key/value lens > 16 KiB), a single table larger than table_size_limit
+  // (the limit only splits compaction outputs, never flush outputs), and a
+  // WAL record bigger than the whole default memtable budget.
+  let dir = "regolith-test-bigval"
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+  let big = Bytes::makei(3 << 20, fn(i : Int) -> Byte { (i % 251).to_byte() })
+  let db = Db::open(dir)
+  db.put(b"big", big)
+  db.flush()
+  let db2 = Db::open(dir)
+  match db2.get(b"big") {
+    Some(Some(v)) => assert_true(v == big, msg="large value mismatch after reopen")
+    _ => assert_true(false, msg="large value lost after reopen")
+  }
+  @fs.remove_dir(dir) catch {
+    _ => ()
+  }
+}
+
 test "table size limit splits compaction output into disjoint tables" {
   let ms = MemoryStorage::new()
   let opts = Options::default()
