@@ -6,6 +6,26 @@
 
 ## [未发布]
 
+### 修复
+
+- **快照与恢复交互破坏持久性（正式验收驳回缺陷）**：0.5.1 的快照
+  pending 延迟删除把被快照钉住的旧表留在盘上——保留快照时删除并
+  flush、压缩后重开，L2 抑墓碑使旧表键区间出现空洞、恢复覆盖判定漏判
+  → 已删除键复活；L1 keep-all 保留陈旧 L1、get 短路返回旧值而 scan
+  （seq 归并）返回新值。修复：快照自含内存字节（SstReader 持整表），
+  压缩合并掉的旧表**一律立即物理删除**（`release_file` 无条件删除，
+  pending/file_held 机制整体移除），`Snapshot::close` 保留为 API 稳定
+  性空操作；表序升级为全序 **(S desc, G desc)**——`Table` 携带 G 计数
+  器、`insert_table` 等 S 平局按 G 降序，get 短路与 scan 归并永远同向
+  （对外部/人工恢复的表集也确定），tools/sim_crash.py 同步镜像
+- 两个验收驳回场景回归测试（修复前失败）：`a held snapshot cannot
+  resurrect deleted keys across reopen (L2 merge)`、`get and scan agree
+  across reopen when a snapshot was held across an update`；原「延迟删除」
+  语义测试改写为「立即删除」语义（`compaction deletes merged tables
+  immediately while snapshots read from memory`、`multiple snapshots are
+  independent in-memory views`）；新增恢复表序全序测试
+  `recovery orders equal-seq l1 tables newest-generation first`
+
 ### 测试
 
 - 新增错误路径测试：`Db::open` 指向常规文件路径 → 报 `DbError::Io`
@@ -16,15 +36,21 @@
 - 新增大值边界测试：3 MiB 值经 flush 与重开逐字节一致——覆盖 3 字节
   varint 长度（键/值长 > 16 KiB）、超 table_size_limit 的单表（限制只
   拆压缩输出、从不拆 flush 输出）、超过默认 memtable 预算的 WAL 记录
-- 双后端 106 项全绿
+- 双后端 109 项全绿（+ crash/sim_crash 各 200 种子）
 
 ### 文档
 
 - README 新增「并发与限制」段：单进程单句柄（同目录双句柄无文件锁，
   属未定义行为）、多线程共享需自行串行化、close = flush 幂等、路径
   指向文件时报 Io
+- README API 段快照语义校准：快照捕获内存字节、不引用表文件；压缩
+  合并掉的旧表立即物理删除
 - 新增 CODE_OF_CONDUCT.md（Contributor Covenant 2.1 中文版），
   README 参与段链接
+- docs/design.md §6 决策记录更新（立即删除 + 表序全序两行）；
+  docs/acceptance.md 新增 M7 里程碑（正式验收修复版）、M4 #4 改写；
+  docs/design-multifile.md 顶部注记指向新方案；申报书/立项说明
+  测试计数同步 109
 
 ## [0.5.1] - 2026-11-03
 

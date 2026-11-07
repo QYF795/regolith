@@ -1198,3 +1198,28 @@ test "live iterator stays sound across interleaved writes and freezes after flus
   assert_true(it.error() is None, msg="live iter: reported an error")
   db.close()
 }
+
+test "recovery orders equal-seq l1 tables newest-generation first" {
+  // Pins the documented total order (S desc, G desc) for L1/L2 reads: two
+  // tables sharing the same watermark S must be ordered newest generation
+  // first, so get short-circuits exactly like scan's sequence merge would.
+  // The engine's own writes never leave two disagreeing equal-S tables on
+  // disk, but recovery must stay deterministic on hand-restored or
+  // externally produced table sets too.
+  let ms = MemoryStorage::new()
+  let old = SstBuilder::new()
+  old.add({ key: b"k", seq: 1UL, value: Some(b"old") })
+  old.add({ key: b"m", seq: 5UL, value: Some(b"z") })
+  write(Storage::Memory(ms), "L1_5_1.sst", old.finish())
+  let new = SstBuilder::new()
+  new.add({ key: b"k", seq: 2UL, value: Some(b"new") })
+  new.add({ key: b"m", seq: 5UL, value: Some(b"z") })
+  write(Storage::Memory(ms), "L1_5_2.sst", new.finish())
+  let db = Db::open_with_options(Storage::Memory(ms), Options::default())
+  assert_true(db.get(b"k") == Some(Some(b"new")), msg="get saw the stale generation")
+  assert_true(db.get(b"m") == Some(Some(b"z")))
+  let keys = collect_range(db.scan_range(b"", None))
+  assert_true(keys.length() == 2)
+  assert_true(keys[0] == b"k")
+  assert_true(keys[1] == b"m")
+}

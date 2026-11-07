@@ -46,11 +46,12 @@ def rec_bytes(r):
 
 
 class Table:
-    __slots__ = ('name', 'S', 'lo', 'hi', 'tbl', 'legacy')
+    __slots__ = ('name', 'S', 'gen', 'lo', 'hi', 'tbl', 'legacy')
 
-    def __init__(self, name, S, tbl, legacy):
+    def __init__(self, name, S, tbl, legacy, gen=0):
         self.name = name
         self.S = S
+        self.gen = gen
         self.lo = min(tbl)
         self.hi = max(tbl)
         self.tbl = dict(tbl)
@@ -130,11 +131,11 @@ class DB:
         return None
 
     def insert_desc(self, tables, t):
-        """Mirror of insert_table: keep S descending, new equal-S after old."""
+        """Mirror of insert_table: newest-first by (S desc, gen desc)."""
         out = []
         done = False
         for u in tables:
-            if not done and u.S < t.S:
+            if not done and (u.S < t.S or (u.S == t.S and u.gen < t.gen)):
                 out.append(t)
                 done = True
             out.append(u)
@@ -180,7 +181,7 @@ class DB:
             if self.storage[name] == ['TORN']:
                 self.remove(name)
                 continue
-            loaded2.append(Table(name, S, dict(self.storage[name]), legacy))
+            loaded2.append(Table(name, S, dict(self.storage[name]), legacy, gen))
         kept2 = []
         legacy_l2_s = 0
         for t in loaded2:
@@ -209,7 +210,7 @@ class DB:
             if self.storage[name] == ['TORN']:
                 self.remove(name)
                 continue
-            t = Table(name, S, dict(self.storage[name]), legacy)
+            t = Table(name, S, dict(self.storage[name]), legacy, gen)
             if t.legacy and legacy_l2_s > 0 and legacy_l2_s >= t.S:
                 self.remove(name)
             else:
@@ -331,7 +332,7 @@ class DB:
         self.table_gen += 1
         name = f"{level}_{piece_seq}_{gen}.sst"
         self.write(name, sorted(piece.items()), fp)
-        pieces.append(Table(name, piece_seq, piece, False))
+        pieces.append(Table(name, piece_seq, piece, False, gen))
 
     def compact(self, fp=None):
         # L0 -> L1: every L0 table plus the L1 tables whose ranges overlap

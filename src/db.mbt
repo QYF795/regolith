@@ -33,11 +33,14 @@
 // crash point the database recovers to checkpoint ∪ some op-prefix.
 
 /// One L1/L2 table: file name, validated reader and key-range metadata.
-/// `seq` is the table's watermark S (its largest sequence number).
+/// `seq` is the table's watermark S (its largest sequence number); `gen` is
+/// the global table counter G from its name (0 for legacy tables). Together
+/// they give a total order: tables are kept newest-first by (S desc, G desc).
 pub(all) struct Table {
   name : String
   reader : SstReader
   seq : UInt64
+  gen : UInt64
   min_key : Bytes
   max_key : Bytes
   bytes : Int
@@ -57,9 +60,6 @@ pub(all) struct Db {
   table_gen : Ref[Int]
   l1_bytes : Ref[Int]
   l2_bytes : Ref[Int]
-  snapshots : Ref[Array[Snapshot]]
-  next_snap_id : Ref[UInt64]
-  pending : Ref[Array[String]]
 }
 
 /// Opens a database over the given storage, recovering its state.
@@ -79,9 +79,6 @@ pub fn Db::open_with_options(storage : Storage, opts : Options) -> Db raise DbEr
     table_gen: Ref(1),
     l1_bytes: Ref(0),
     l2_bytes: Ref(0),
-    snapshots: Ref([]),
-    next_snap_id: Ref(0UL),
-    pending: Ref([]),
   }
   db.recover()
   db
@@ -179,8 +176,9 @@ pub fn Db::get(self : Db, key : Bytes) -> Option[Option[Bytes]] raise DbError {
       }
     }
   }
-  // L1/L2 tables are kept newest-first (descending S): a stale overlapping
-  // table left by a crash is shadowed by the newer one checked first.
+  // L1/L2 tables are kept newest-first by (S desc, G desc): a stale
+  // overlapping table left by a crash is shadowed by the newer one checked
+  // first.
   for t in self.l1_tables.val {
     if t.reader.may_contain(key) {
       match t.reader.get(key) {
@@ -513,6 +511,7 @@ fn Db::seal_piece(
       name: name,
       reader: reader,
       seq: seq,
+      gen: gen.to_uint64(),
       min_key: fk,
       max_key: lk,
       bytes: bytes.length(),
@@ -521,12 +520,17 @@ fn Db::seal_piece(
   }
 }
 
-/// Inserts `t` keeping the array ordered by descending `seq` (newest first).
+/// Inserts `t` keeping the array ordered newest-first by (seq desc, gen
+/// desc). The seq tie-break matters when a crash left two tables with the
+/// same watermark S on disk (the merge output plus its not-yet-deleted
+/// input): the higher generation is the newer table and must be checked
+/// first, so `get` short-circuits to the new value like `scan` (seq merge)
+/// would.
 fn insert_table(tables : Array[Table], t : Table) -> Array[Table] {
   let out : Array[Table] = []
   let mut done = false
   for u in tables {
-    if !done && u.seq < t.seq {
+    if !done && (u.seq < t.seq || (u.seq == t.seq && u.gen < t.gen)) {
       out.push(t)
       done = true
     }
@@ -616,61 +620,13 @@ fn covered_by(t : Table, candidates : Array[Table]) -> Bool {
   }
 }
 
-/// True if any live snapshot still pins `name`.
-fn Db::file_held(self : Db, name : String) -> Bool {
-  for snap in self.snapshots.val {
-    if snap.closed.val {
-      continue
-    }
-    for n in snap.l0_names {
-      if n == name {
-        return true
-      }
-    }
-    for n in snap.l1_names {
-      if n == name {
-        return true
-      }
-    }
-    for n in snap.l2_names {
-      if n == name {
-        return true
-      }
-    }
-  }
-  false
-}
-
-/// Removes a table file compaction no longer needs, unless a live snapshot
-/// still reads it — then it is deferred to the pending list and physically
-/// deleted when the last holder releases.
+/// Removes a table file compaction no longer needs — always immediately.
+/// Snapshots are self-contained in-memory views (every SstReader holds the
+/// full table bytes), so no snapshot ever reads a table file; deferring a
+/// deletion here would only leave a stale file on disk for the next open to
+/// misclassify (resurrected keys, get/scan divergence).
 fn Db::release_file(self : Db, name : String) -> Unit raise DbError {
-  if self.file_held(name) {
-    self.pending.val.push(name)
-  } else {
-    remove(self.storage, name)
-  }
-}
-
-/// Unregisters a closed snapshot and sweeps the pending list: files no
-/// snapshot holds any more are deleted now.
-pub fn Db::release_snapshot(self : Db, id : UInt64) -> Unit raise DbError {
-  let kept : Array[Snapshot] = []
-  for snap in self.snapshots.val {
-    if snap.id != id {
-      kept.push(snap)
-    }
-  }
-  self.snapshots.val = kept
-  let kept_pending : Array[String] = []
-  for p in self.pending.val {
-    if self.file_held(p) {
-      kept_pending.push(p)
-    } else {
-      remove(self.storage, p)
-    }
-  }
-  self.pending.val = kept_pending
+  remove(self.storage, name)
 }
 
 /// Flushes any pending writes; safe to call any number of times.
@@ -735,7 +691,7 @@ fn parse_table_name(name : String) -> Option[ParsedName] {
 /// removed. A table whose footer checks out but whose magic is unknown was
 /// written by a newer format version — deleting it would destroy data, so
 /// the open fails loudly instead (upgrade regolith to read it).
-fn Db::load_table(self : Db, name : String, seq : UInt64) -> Option[Table] raise DbError {
+fn Db::load_table(self : Db, name : String, seq : UInt64, gen : UInt64) -> Option[Table] raise DbError {
   match read(self.storage, name) {
     None => None
     Some(bytes) => {
@@ -761,6 +717,7 @@ fn Db::load_table(self : Db, name : String, seq : UInt64) -> Option[Table] raise
             name: name,
             reader: r,
             seq: seq,
+            gen: gen,
             min_key: fk,
             max_key: lk,
             bytes: bytes.length(),
@@ -789,7 +746,7 @@ fn Db::recover(self : Db) -> Unit raise DbError {
         if !p.legacy && p.gen.to_int() > max_gen {
           max_gen = p.gen.to_int()
         }
-        match self.load_table(name, p.seq) {
+        match self.load_table(name, p.seq, p.gen) {
           None => ()
           Some(t) => all_l2.push((t, p.legacy))
         }
@@ -835,7 +792,7 @@ fn Db::recover(self : Db) -> Unit raise DbError {
         if !p.legacy && p.gen.to_int() > max_gen {
           max_gen = p.gen.to_int()
         }
-        match self.load_table(name, p.seq) {
+        match self.load_table(name, p.seq, p.gen) {
           None => ()
           Some(t) => {
             if p.legacy && legacy_l2_s > 0UL && legacy_l2_s >= t.seq {
@@ -889,6 +846,7 @@ fn Db::recover(self : Db) -> Unit raise DbError {
                   name: name,
                   reader: r,
                   seq: m,
+                  gen: 0UL,
                   min_key: r.first_key(),
                   max_key: r.max_key(),
                   bytes: bytes.length(),

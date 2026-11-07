@@ -15,6 +15,21 @@ fn collect_keys(it : MergeIterator) -> Array[Bytes] raise DbError {
   keys
 }
 
+fn collect_entries(it : MergeIterator) -> Array[(Bytes, Option[Bytes])] raise DbError {
+  let out : Array[(Bytes, Option[Bytes])] = []
+  while true {
+    match it.next() {
+      None => break
+      Some(e) => out.push((e.key, e.value))
+    }
+  }
+  match it.error() {
+    Some(err) => raise err
+    None => ()
+  }
+  out
+}
+
 test "snapshot sees the state at creation while the db advances" {
   let db = Db::open_memory()
   db.put(b"a", b"1")
@@ -92,7 +107,7 @@ test "snapshot reads survive flush and compaction of the live db" {
   snap.close()
 }
 
-test "compaction defers files held by snapshots until close" {
+test "compaction deletes merged tables immediately while snapshots read from memory" {
   let ms = MemoryStorage::new()
   let opts = Options::default().with_compaction_trigger(2)
   let db = Db::open_with_options(Storage::Memory(ms), opts)
@@ -101,26 +116,23 @@ test "compaction defers files held by snapshots until close" {
   db.put(b"b", b"2")
   db.flush()
   assert_true(db.stats().l1_files == 1)
+  let held = db.l1_tables.val[0].name
   let snap = db.snapshot()
-  assert_true(snap.l1_names.length() == 1, msg="snapshot expected one L1 table")
-  let held = snap.l1_names[0]
   assert_true(list(db.storage, "").contains(held))
   // Two more flushes (rewriting the same keys) trigger an L1 compaction:
-  // the old L1 is merged away but stays on storage because the snapshot
-  // pins it.
+  // the old L1 is merged away and its file deleted right away — the
+  // snapshot holds the parsed bytes in memory and never touches the file.
   db.put(b"a", b"3")
   db.flush()
   db.put(b"b", b"4")
   db.flush()
-  assert_true(list(db.storage, "").contains(held))
+  assert_true(!list(db.storage, "").contains(held), msg="merged table file must be deleted immediately")
   assert_true(snap.get(b"a") == Some(Some(b"1")))
   assert_true(snap.get(b"b") == Some(Some(b"2")))
   snap.close()
-  // Released: the deferred file is physically gone now.
-  assert_true(!list(db.storage, "").contains(held))
 }
 
-test "multiple snapshots release independently" {
+test "multiple snapshots are independent in-memory views" {
   let ms = MemoryStorage::new()
   let opts = Options::default().with_compaction_trigger(2)
   let db = Db::open_with_options(Storage::Memory(ms), opts)
@@ -130,19 +142,19 @@ test "multiple snapshots release independently" {
   db.flush()
   let snap1 = db.snapshot()
   let snap2 = db.snapshot()
-  assert_true(snap1.l1_names.length() == 1, msg="snapshot expected one L1 table")
-  let held = snap1.l1_names[0]
   db.put(b"a", b"3")
   db.flush()
   db.put(b"b", b"4")
   db.flush()
-  assert_true(list(db.storage, "").contains(held))
-  snap1.close()
-  // snap2 still pins the file.
-  assert_true(list(db.storage, "").contains(held))
+  // Both snapshots keep serving the frozen view after the tables they
+  // captured were merged away and deleted.
+  assert_true(snap1.get(b"a") == Some(Some(b"1")))
   assert_true(snap2.get(b"a") == Some(Some(b"1")))
+  assert_true(snap1.get(b"b") == Some(Some(b"2")))
+  assert_true(snap2.get(b"b") == Some(Some(b"2")))
+  assert_true(db.get(b"a") == Some(Some(b"3")))
+  snap1.close()
   snap2.close()
-  assert_true(!list(db.storage, "").contains(held))
 }
 
 test "snapshot iterator is a stable handle across writes flush and compact" {
@@ -180,6 +192,65 @@ test "snapshot close is idempotent and reads survive close" {
   let snap = db.snapshot()
   snap.close()
   snap.close()
-  // A closed snapshot still serves reads from its pinned in-memory tables.
+  // A closed snapshot still serves reads from its captured in-memory tables.
   assert_true(snap.get(b"a") == Some(Some(b"1")))
+}
+
+// Acceptance rejection regression (2026-11): holding a snapshot deferred the
+// physical deletion of tables consumed by compaction. A live snapshot kept
+// files on disk that recovery could not classify — reopening resurrected
+// deleted keys and diverged get from scan.
+
+test "a held snapshot cannot resurrect deleted keys across reopen (L2 merge)" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_compaction_trigger(2)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.put(b"c", b"3")
+  db.flush() // 2nd flush triggers compact -> L1(a,b,c)
+  db.compact_l2() // -> L2(a@1,b@2,c@3)
+  let snap = db.snapshot()
+  // Delete while the snapshot is held, then flush + compact + L2 merge: the
+  // tombstone is suppressed and the old L2 is consumed. If the consumed
+  // file lingers (pinned), the next open sees a stale copy of `a`.
+  db.delete(b"a")
+  db.flush()
+  db.compact() // L1(tomb a)
+  db.compact_l2() // tomb suppressed -> L2(b,c)
+  // The snapshot stays open — a process exiting without close leaves the
+  // same files behind.
+  let db2 = Db::open_with_options(Storage::Memory(ms), opts)
+  assert_true(db2.get(b"a") == None, msg="deleted key resurrected after reopen")
+  let entries = collect_entries(db2.scan())
+  assert_true(entries.length() == 2, msg="scan must not contain the deleted key")
+  assert_true(entries[0] == (b"b", Some(b"2")))
+  assert_true(entries[1] == (b"c", Some(b"3")))
+  assert_true(snap.get(b"a") == Some(Some(b"1")), msg="snapshot view must stay frozen")
+  snap.close()
+}
+
+test "get and scan agree across reopen when a snapshot was held across an update" {
+  let ms = MemoryStorage::new()
+  let opts = Options::default().with_compaction_trigger(2)
+  let db = Db::open_with_options(Storage::Memory(ms), opts)
+  db.put(b"a", b"1")
+  db.put(b"b", b"2")
+  db.flush()
+  db.put(b"c", b"3")
+  db.flush() // 2nd flush triggers compact -> L1(a@1,b@2,c@3)
+  let snap = db.snapshot()
+  db.put(b"a", b"9") // a@4
+  db.flush()
+  db.compact() // merges L0 + the overlapping L1 -> L1(a@4,b@2,c@3)
+  db.compact_l2() // -> L2(a@4,b@2,c@3)
+  let db2 = Db::open_with_options(Storage::Memory(ms), opts)
+  // L1 keep-all keeps the pinned stale L1 on disk: get short-circuits to
+  // the old value while scan (sequence merge) sees the new one.
+  assert_true(db2.get(b"a") == Some(Some(b"9")), msg="get returned a stale value after reopen")
+  let entries = collect_entries(db2.scan())
+  assert_true(entries[0] == (b"a", Some(b"9")), msg="scan and get must agree")
+  assert_true(snap.get(b"a") == Some(Some(b"1")), msg="snapshot view must stay frozen")
+  snap.close()
 }

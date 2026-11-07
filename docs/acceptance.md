@@ -1,6 +1,6 @@
 # Regolith 验收清单
 
-本文按里程碑列出验收项、实现状态与对应测试。当前状态：**106 项测试在
+本文按里程碑列出验收项、实现状态与对应测试。当前状态：**109 项测试在
 js 与 wasm-gc 双后端全部通过，`moon check` 零警告**（native 后端需本机
 C 编译器，由 CI 验证，见 §M2）。
 
@@ -75,8 +75,8 @@ C 编译器，由 CI 验证，见 §M2）。
 |---|---|---|---|
 | 1 | `db.snapshot()` 冻结当前状态：活库继续写/删，快照读不变（含墓碑） | ✅ | `snapshot sees the state at creation while the db advances`、`snapshot sees tombstones frozen before creation` |
 | 2 | 快照上的 scan / scan_prefix / scan_range 与 Db 同构、视图冻结 | ✅ | `snapshot scan prefix and range see the frozen view` |
-| 3 | 快照读跨 flush、L1/L2 压缩仍正确（表钉住，延迟删除） | ✅ | `snapshot reads survive flush and compaction of the live db` |
-| 4 | 被快照钉住的旧表延迟删除，最后一个持有者 close 后物理清除 | ✅ | `compaction defers files held by snapshots until close`、`multiple snapshots release independently` |
+| 3 | 快照读跨 flush、L1/L2 压缩仍正确 | ✅ | `snapshot reads survive flush and compaction of the live db` |
+| 4 | 压缩合并掉的旧表立即物理删除，快照自含内存视图（见 M7——0.5.1 的延迟删除方案被正式验收否决，已替换为本方案） | ✅ | `compaction deletes merged tables immediately while snapshots read from memory`、`multiple snapshots are independent in-memory views` |
 | 5 | 迭代器句柄语义：持有快照迭代器期间活库任意写/flush/压缩，句柄稳定输出冻结视图；可暂停（停止 next）可恢复（重开迭代器或从上次键 scan_range） | ✅ | `snapshot iterator is a stable handle across writes flush and compact` |
 | 6 | close 幂等；快照为纯内存概念，不改变磁盘格式与恢复算法 | ✅ | `snapshot close is idempotent and reads survive close`；docs/format.md §1 注记 |
 | 7 | mooncakes.io 0.2.0（快照版）发布，消费方 `moon add` 后端到端验证 | ✅ | `moon publish` 200 OK；消费方验证：快照冻结视图（活库推进后 snap 读不变、absent 键区分）、snapshot.scan_range、close、reopen 持久化全部符合预期 |
@@ -106,7 +106,7 @@ C 编译器，由 CI 验证，见 §M2）。
 | 4 | 升级路径：v2+v3 表共存读写、压缩吞并 v2 重写为 v3、重开数据完好；v2 空首键回归修复 | ✅ | `v2 and v3 tables coexist (upgrade path)`、`v2 table with an empty first key still parses`、`db recovers mixed v2 and v3 tables and compacts them into v3` |
 | 5 | 未来格式拒绝：未知 magic + crc2 合法的手造表 → 打开报 `Corrupt` 且文件原样保留（升级后可读），不误删 | ✅ | `db refuses future-format tables without deleting them` |
 | 6 | 损坏矩阵 v3 行逐项注入（shared 越界、重启点 shared≠0、num_r 非法、偏移非法），CRC 修复后仍被重启段校验拒绝 | ✅ | `v3 block corruption is detected` |
-| 7 | 回归全绿：双后端 106 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc） |
+| 7 | 回归全绿：双后端 106 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 | ✅ | `moon test`（js + wasm-gc）——当时基数 106，现为 109（见 M7） |
 | 8 | mooncakes.io 0.5.0（键压缩 v3）发布，消费方 `moon add --upgrade` 升级验证 | ✅ | `moon publish` 200 OK；消费方验证：0.4.1 写入的旧 v2 表目录被 0.5.0 打开/归并/重开键值全对、新写表 magic 全为 `RGSST3`、CLI/demo 端到端全过 |
 | 9 | 随机字节损坏 fuzz：任意位置 1–2 字节翻转 200 种子，结果只能是 Corrupt 拒绝或（CRC 碰撞漏检时）与构造输入一致的完整往返 | ✅ | `v3 random byte corruption never yields wrong data` |
 | 10 | 快速开始契约：`Db::open(dir)` 对不存在的目录自动创建（无需手工 setup），写入 flush/compact 后重开点查与扫描完好 | ✅ | `Db::open on a fresh path creates the directory and data survives reopen` |
@@ -114,6 +114,25 @@ C 编译器，由 CI 验证，见 §M2）。
 | 12 | 错误路径：`Db::open` 指向常规文件而非目录 → 报 `DbError::Io`（不崩溃、不误开），错误经存储抽象一路传播 | ✅ | `Db::open on a path that is a regular file raises Io` |
 | 13 | `Db::close` 封存契约：close = flush（幂等），未显式 flush 的写入经 close 后重开仍在 | ✅ | `Db::close seals pending writes and is idempotent` |
 | 14 | 大值边界：3 MiB 值经 flush 与重开逐字节一致（3 字节 varint 长度、超 table_size_limit 单表、超默认 memtable 预算的 WAL 记录） | ✅ | `large value (3 MiB) survives flush and reopen byte-exact` |
+
+## M7 — 正式验收修复版（快照与恢复交互）
+
+正式验收驳回缺陷：「快照与恢复交互破坏持久性：保留快照时删除并 flush、
+压缩后重开，已删除键会复活；更新场景还出现 get 返回旧值而 scan 返回新值」。
+根因：0.5.1 的快照 pending 延迟删除把被钉住的旧表留在盘上，恢复算法无法
+正确分类它们（L2 抑墓碑后键区间出现空洞 → 覆盖判定漏判 → 复活；L1
+keep-all 保留陈旧 L1 → get 短路旧值、scan 走 seq 归并新值）。修复方案：
+快照自含内存字节（SstReader 持整表），压缩合并掉的旧表一律立即物理删除；
+表序升级为全序 (S desc, G desc)，等 S 表恢复时按 G 降序决平。
+
+| # | 验收项 | 状态 | 证明 |
+|---|---|---|---|
+| 1 | 压缩合并掉的旧表立即物理删除：快照存活与否不改变文件生命周期，快照读走内存字节 | ✅ | `compaction deletes merged tables immediately while snapshots read from memory`（原「延迟删除」测试改写）、`multiple snapshots are independent in-memory views` |
+| 2 | 验收驳回场景一回归：保留快照时删除 + flush + compact + compact_l2 后重开，已删键不复活——get 返回缺席，scan 不含该键 | ✅ | `a held snapshot cannot resurrect deleted keys across reopen (L2 merge)`（修复前该测试失败） |
+| 3 | 验收驳回场景二回归：保留快照跨更新（compact + compact_l2）后重开，get 与 scan 一致返回新值 | ✅ | `get and scan agree across reopen when a snapshot was held across an update`（修复前该测试失败） |
+| 4 | 恢复表序全序 (S desc, G desc)：等 S 表按 G 降序，get 短路与 scan 的 seq 归并同向（对外部/人工恢复的表集也确定） | ✅ | `recovery orders equal-seq l1 tables newest-generation first` |
+| 5 | 回归全绿：双后端 109 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 + 快照 soak 1 万操作 | ✅ | `moon test`（js + wasm-gc）；`python -I tools/sim_crash.py 200` |
+| 6 | 消费方 API 兼容：`snapshot()`/`close()` 签名对 0.5.1 调用方保持源码兼容（close 保留为空操作） | ⏳ | 随 0.5.2 发布执行消费方工程 `moon add --upgrade` 后原快照示例逐字编译运行 |
 
 ## 复现步骤
 

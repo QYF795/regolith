@@ -90,7 +90,7 @@ fn main raise {
   db.flush() // 主动持久化（进程级）
   println(show(snap.get(b"key"))) // 仍是 Some(Some(b"value"))（冻结视图）
   println(show(db.get(b"key"))) // Some(None)（活库已推进）
-  snap.close() // 释放快照钉住的表文件
+  snap.close() // 标记快照用完（快照为纯内存视图，close 保留兼容；读仍可用）
 }
 ```
 
@@ -103,7 +103,8 @@ core 0.10.15 起 `Option` 的 `to_string` 已弃用，直接调用会收到弃�
 语义）；但键序严格升序、无重复，且 `flush` 之后剩余输出精确等于 flush
 时刻的状态（memtable 侧被换表冻结、表侧字节本就不可变），`compact`
 删除表文件也不影响已创建的迭代器。需要跨写入的冻结视图请用
-`Db::snapshot()`。
+`Db::snapshot()`——快照捕获当前全部表的**内存字节**（不引用表文件），
+压缩合并掉的旧表始终立即物理删除，快照存活与否不影响文件生命周期。
 
 配置项通过 `Options::default()` 链式覆盖，`Db::open_with_options(storage, opts)` 生效：
 
