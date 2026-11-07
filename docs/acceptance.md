@@ -132,7 +132,7 @@ keep-all 保留陈旧 L1 → get 短路旧值、scan 走 seq 归并新值）。�
 | 3 | 验收驳回场景二回归：保留快照跨更新（compact + compact_l2）后重开，get 与 scan 一致返回新值 | ✅ | `get and scan agree across reopen when a snapshot was held across an update`（修复前该测试失败） |
 | 4 | 恢复表序全序 (S desc, G desc)：等 S 表按 G 降序，get 短路与 scan 的 seq 归并同向（对外部/人工恢复的表集也确定） | ✅ | `recovery orders equal-seq l1 tables newest-generation first` |
 | 5 | 回归全绿：双后端 109 项 + crash/sim_crash 各 200 种子 + soak 5 万操作 + 快照 soak 1 万操作 | ✅ | `moon test`（js + wasm-gc）；`python -I tools/sim_crash.py 200` |
-| 6 | 消费方 API 兼容：`snapshot()`/`close()` 签名对 0.5.1 调用方保持源码兼容（close 保留为空操作） | ⏳ | 随 0.5.2 发布执行消费方工程 `moon add --upgrade` 后原快照示例逐字编译运行 |
+| 6 | 消费方 API 兼容：`snapshot()`/`close()` 签名对 0.5.1 调用方保持源码兼容（close 保留为空操作） | ✅ | 消费方工程 `moon add` 0.5.1 → `--upgrade` 0.5.2：0.5.1 数据目录被完整读出并续写重开；快照冻结/批写三态/快速开始全过；两个驳回场景（复活、get/scan 分歧）在已发布产物上复现通过 |
 
 ## 复现步骤
 
